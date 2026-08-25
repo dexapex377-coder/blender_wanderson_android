@@ -1,0 +1,56 @@
+// SPDX-FileCopyrightText: 2026 Blender Authors
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Packaging project: consumes the pre-built libblender.so + harvested .so deps
+// and the runtime payload staged by build_files/android/apk/package.sh, and
+// assembles/signs an APK. Run `package.sh` once first to populate the stage.
+
+plugins {
+  id 'com.android.application'
+}
+
+// Under the build base: <repo>/../blender_build_android/android_apk_stage_<cfg>.
+// Pick the config with -PblenderConfig=lite|full (default full); must be staged
+// by package.sh first.
+def blenderConfig = project.findProperty('blenderConfig') ?: 'full'
+def stageDir = "${rootDir}/../../../../blender_build_android/android_apk_stage_${blenderConfig}"
+
+android {
+  namespace 'org.blender.blender'
+  compileSdk 35
+  ndkVersion '28.2.13676358'
+
+  defaultConfig {
+    applicationId 'org.blender.blender'
+    minSdk 31
+    targetSdk 34
+    versionCode 1
+    versionName '5.3-android'
+    ndk { abiFilters 'arm64-v8a' }
+  }
+
+  sourceSets {
+    main {
+      manifest.srcFile 'src/main/AndroidManifest.xml'
+      java.srcDirs = ['src/main/java']
+      jniLibs.srcDirs = ["${stageDir}/lib"]
+      assets.srcDirs = ["${stageDir}/assets"]
+    }
+  }
+
+  // libblender.so is huge and already stripped; don't recompress/repack.
+  packagingOptions {
+    jniLibs { useLegacyPackaging = true }
+  }
+
+  androidResources { noCompress 'zip' }
+
+  buildTypes {
+    debug { debuggable true }
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+}

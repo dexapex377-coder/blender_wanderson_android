@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-FileCopyrightText: 2026 Blender Authors
+     SPDX-License-Identifier: GPL-2.0-or-later -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.blender.blender"
+    android:versionCode="5030001"
+    android:versionName="5.3.0 Alpha (S24 Ultra)">
+
+    <!-- Vulkan is used at runtime; not required so it installs on emulators too. -->
+    <uses-feature android:name="android.hardware.vulkan.version"
+        android:version="0x400000" android:required="false" />
+    <!-- Extension repositories, the "Get Extensions" browser and any script that
+         fetches a URL all go through Python's urllib. Without this the socket
+         call fails with EPERM before a connection is ever attempted. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lets Blender tell "offline" apart from "server unreachable" if that
+         distinction is ever wanted; harmless and not a runtime permission. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <!-- Blender reads and writes .blend files and their assets by path, so it needs
+         access to shared storage rather than the scoped, app-private sandbox. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <application
+        android:label="Blender"
+        android:icon="@drawable/ic_launcher"
+        android:theme="@style/Theme.Blender"
+        android:hasCode="true"
+        android:allowBackup="true"
+        android:extractNativeLibs="true"
+        android:largeHeap="true">
+
+        <!-- BlenderActivity extends NativeActivity; loads libblender.so and
+             bridges soft-keyboard IME text to native.
+
+             screenOrientation="user" follows the device's own rotation setting,
+             so the app turns when the user lets it and stays put when they have
+             rotation locked. orientation and screenSize are in configChanges,
+             which keeps the activity from being recreated on every turn: the
+             surface is resized under it instead, and GHOST rebuilds the Vulkan
+             swapchain from APP_CMD_WINDOW_RESIZED. -->
+        <activity
+            android:name="org.blender.blender.BlenderActivity"
+            android:label="Blender"
+            android:screenOrientation="user"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|density|navigation|uiMode"
+            android:exported="true">
+            <meta-data android:name="android.app.lib_name" android:value="blender" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
