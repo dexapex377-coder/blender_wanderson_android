@@ -11,6 +11,12 @@ tested on a Galaxy S24 Ultra.**
 
 ![Blender screenshot](https://code.blender.org/wp-content/uploads/2018/12/springrg.jpg "Blender screenshot")
 
+## Demonstration
+
+[![Watch the Android demo on YouTube](https://img.youtube.com/vi/qzdrdLbK7Kw/hqdefault.jpg)](https://www.youtube.com/watch?v=qzdrdLbK7Kw)
+
+[Watch the Android demonstration on YouTube](https://www.youtube.com/watch?v=qzdrdLbK7Kw)
+
 ## A study project
 
 This started as a way to learn, and that is what it stayed. It is not
@@ -34,11 +40,12 @@ sketchbook, not as a reference implementation.
 
 ## Credits
 
-This port did not start with me. It started with **Simfeo**, who did the hard
-bring up work, and whose release is the build this fork was derived from:
+This port did not start with me. It started with [**@idimus**](https://www.reddit.com/user/idimus/)
+(a.k.a. simfeo), who did the hard bring up work, and whose release is
+the build this fork was derived from:
 
 - <https://github.com/simfeo/blender/releases/tag/android-alpha-1>
-- Simfeo's releases: <https://github.com/simfeo/blender/releases>
+- @idimus / simfeo's releases: <https://github.com/simfeo/blender/releases>
 
 And of course **Blender** itself, made and maintained by the Blender Foundation
 and its community. None of this exists without them.
