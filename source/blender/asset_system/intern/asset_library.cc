@@ -485,7 +485,9 @@ Vector<AssetLibraryReference> all_valid_asset_library_refs()
     result.append(library_ref);
   }
 
-  const bool include_remote_libraries = USER_EXPERIMENTAL_TEST(&U, use_remote_asset_libraries);
+  /* Touch: remote_libraries_supported() is the Android gate; see AS_remote_library.hh. */
+  const bool include_remote_libraries = remote_libraries_supported() &&
+                                        USER_EXPERIMENTAL_TEST(&U, use_remote_asset_libraries);
   const bool include_online_essentials = (U.asset_flag & USER_ASSETS_USE_ONLINE_ESSENTIALS) != 0;
   if (include_remote_libraries && include_online_essentials) {
     AssetLibraryReference library_ref{};

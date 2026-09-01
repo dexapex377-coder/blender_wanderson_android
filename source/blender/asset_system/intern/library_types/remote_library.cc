@@ -938,6 +938,15 @@ StringRefNull OnlineAssetInfo::asset_file() const
  */
 const int8_t REMOTE_LIBRARY_DIRNAME_LEN = 16;
 
+bool remote_libraries_supported()
+{
+#ifdef __ANDROID__
+  return false;
+#else
+  return true;
+#endif
+}
+
 std::string remote_library_cache_directory_path_from_url(const StringRef remote_url)
 {
   BLI_assert_msg(

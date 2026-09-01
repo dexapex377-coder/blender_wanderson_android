@@ -5039,8 +5039,17 @@ static ui::Block *block_create__close_file_dialog(bContext *C, ARegion *region, 
       block, ui::BLOCK_KEEP_OPEN | ui::BLOCK_LOOP | ui::BLOCK_NO_WIN_CLIP | ui::BLOCK_NUMSELECT);
   block_theme_style_set(block, ui::BLOCK_THEME_STYLE_POPUP);
 
-  ui::Layout &layout = *uiItemsAlertBox(
-      block, (bmain->colorspace.is_missing_opencolorio_config) ? 44 : 34, ui::AlertIcon::Question);
+  /* Touch: this block sets BLOCK_NO_WIN_CLIP, so nothing trims it to the window -- it is simply
+   * drawn off the edge. Three buttons side by side at the touch menu scale are wider than a phone
+   * held upright, which is why "Save" was the half that fell off. Narrower box, and the buttons
+   * stacked further down. */
+  const wmWindow *win_dialog = CTX_wm_window(C);
+  const bool upright = win_dialog != nullptr && WM_window_native_pixel_x(win_dialog) <
+                                                    WM_window_native_pixel_y(win_dialog);
+
+  const int alert_width = (bmain->colorspace.is_missing_opencolorio_config) ? (upright ? 30 : 44) :
+                                                                             (upright ? 22 : 34);
+  ui::Layout &layout = *uiItemsAlertBox(block, alert_width, ui::AlertIcon::Question);
 
   const bool needs_overwrite_confirm = BKE_main_needs_overwrite_confirm(bmain);
 
@@ -5134,7 +5143,17 @@ static ui::Block *block_create__close_file_dialog(bContext *C, ARegion *region, 
   const bool windows_layout = false;
 #endif
 
-  if (windows_layout) {
+  if (upright) {
+    /* Touch: one under the other, in the order the row would have read, so the button someone
+     * already knows to reach for is still the last one. */
+    ui::Layout &col = layout.column(false);
+    col.scale_y_set(1.4f);
+
+    wm_block_file_close_discard_button(block, post_action);
+    wm_block_file_close_cancel_button(block, post_action);
+    wm_block_file_close_save_button(block, post_action, needs_overwrite_confirm);
+  }
+  else if (windows_layout) {
     /* Windows standard layout. */
 
     ui::Layout &split = layout.split(0.0f, true);

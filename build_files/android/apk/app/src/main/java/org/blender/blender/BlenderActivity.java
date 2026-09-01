@@ -8,10 +8,17 @@ import android.app.NativeActivity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.AssetManager;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.ParcelFileDescriptor;
+import android.os.storage.StorageManager;
+import android.os.storage.StorageVolume;
+import android.provider.DocumentsContract;
+import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.system.Os;
 import android.text.InputType;
@@ -69,6 +76,7 @@ public class BlenderActivity extends NativeActivity {
 
   private native void nativeOnCommitText(String text);
   private native void nativeOnKey(int keycode, int action, int metaState);
+  private native void nativeOpenMainFile(String path);
 
   @Override
   protected void onCreate(Bundle state) {
@@ -77,6 +85,9 @@ public class BlenderActivity extends NativeActivity {
     /* Must precede super.onCreate(): that is what starts the native thread,
      * and Blender reads both of these during its Python initialization. */
     setUpPythonInterpreter();
+    publishHardwareNames();
+    /* Also before super.onCreate(): the glue reads this while building argv. */
+    publishLaunchFile(getIntent());
     super.onCreate(state);
     enterImmersive();
     requestAllFilesAccess();
@@ -105,6 +116,199 @@ public class BlenderActivity extends NativeActivity {
       catch (Exception ignored) {
       }
     }
+  }
+
+  /* A .blend tapped in a file manager while Blender is already running.
+   * launchMode="singleTask" routes it here rather than building a second
+   * NativeActivity, which would start a second Blender in this process. */
+  @Override
+  protected void onNewIntent(Intent intent) {
+    super.onNewIntent(intent);
+    setIntent(intent);
+    String path = resolveBlendPath(intent);
+    if (path != null) {
+      /* Queued in GHOST and turned into GHOST_kEventOpenMainFile on Blender's own
+       * thread, which wm_window.cc already answers with WM_OT_open_mainfile -- the
+       * same operator the File menu uses, so the unsaved-changes prompt and the
+       * recent files list behave the way they do everywhere else. */
+      nativeOpenMainFile(path);
+    }
+  }
+
+  /* Cold start: the file is the startup file, so it goes in as a launch argument
+   * the way a double-clicked file reaches argv[1] on macOS (GHOST_HACK_getFirstFile
+   * in creator.cc). Loading the startup file first and replacing it through the
+   * event above would be a visible double load, and would prompt about discarding
+   * an empty scene.
+   *
+   * An environment variable because the native thread has not started yet and this
+   * process already passes values across that way, a few lines up in
+   * publishHardwareNames(). */
+  private void publishLaunchFile(Intent intent) {
+    String path = resolveBlendPath(intent);
+    if (path == null) {
+      return;
+    }
+    try {
+      Os.setenv("BLENDER_ANDROID_OPEN_FILE", path, true);
+    }
+    catch (Exception ex) {
+      Log.w(TAG, "cannot publish launch file", ex);
+    }
+  }
+
+  private String resolveBlendPath(Intent intent) {
+    if (intent == null) {
+      return null;
+    }
+    String action = intent.getAction();
+    if (!Intent.ACTION_VIEW.equals(action) && !Intent.ACTION_EDIT.equals(action)) {
+      return null;
+    }
+    Uri uri = intent.getData();
+    if (uri == null) {
+      return null;
+    }
+    try {
+      String path = resolveUriToPath(uri);
+      Log.i(TAG, "open request " + uri + " -> " + path);
+      return path;
+    }
+    catch (Exception ex) {
+      Log.w(TAG, "cannot resolve " + uri, ex);
+      return null;
+    }
+  }
+
+  /* Blender opens files by path -- it has no notion of a stream -- and a .blend
+   * opened from a copy loses the relative paths to its textures and linked
+   * libraries, and saves back somewhere the user will never find it. So every rung
+   * here tries to name the real file, and the copy is only what is left when
+   * nothing does. */
+  private String resolveUriToPath(Uri uri) throws Exception {
+    if ("file".equals(uri.getScheme())) {
+      String path = usable(uri.getPath());
+      if (path != null) {
+        return path;
+      }
+    }
+
+    /* The storage document provider spells the volume and the relative path into
+     * the document id: "primary:Download/scene.blend". */
+    if (DocumentsContract.isDocumentUri(this, uri)
+        && "com.android.externalstorage.documents".equals(uri.getAuthority()))
+    {
+      String[] id = DocumentsContract.getDocumentId(uri).split(":", 2);
+      if (id.length == 2) {
+        File root = "primary".equalsIgnoreCase(id[0]) ? Environment.getExternalStorageDirectory()
+                                                      : volumeRoot(id[0]);
+        if (root != null) {
+          String path = usable(new File(root, id[1]).getAbsolutePath());
+          if (path != null) {
+            return path;
+          }
+        }
+      }
+    }
+
+    /* MediaStore's DATA column is deprecated but still carries the real path. */
+    if ("content".equals(uri.getScheme())) {
+      try (Cursor c = getContentResolver().query(
+               uri, new String[] {MediaStore.MediaColumns.DATA}, null, null, null)) {
+        if (c != null && c.moveToFirst() && !c.isNull(0)) {
+          String path = usable(c.getString(0));
+          if (path != null) {
+            return path;
+          }
+        }
+      }
+      catch (Exception ignored) {
+        /* A provider is free to reject the column. */
+      }
+    }
+
+    /* Whatever the provider is, the descriptor it hands back is usually a real
+     * file and /proc/self/fd names it. This is the rung that covers the providers
+     * nobody enumerated. */
+    try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r")) {
+      if (pfd != null) {
+        String path = usable(Os.readlink("/proc/self/fd/" + pfd.getFd()));
+        if (path != null) {
+          return path;
+        }
+      }
+    }
+    catch (Exception ignored) {
+    }
+
+    /* Nothing real behind it, or all-files access has not been granted yet --
+     * canRead() fails on the very first launch from a file manager, because
+     * requestAllFilesAccess() only runs after onCreate(). Take a copy so the tap
+     * still opens something; relative links inside it will not resolve. */
+    return copyToCache(uri);
+  }
+
+  /* Only accept a rung's answer if it names a file this process can actually open.
+   * Falling through on a failure is what makes the missing-permission case end in
+   * a working copy rather than an error. */
+  private static String usable(String path) {
+    if (path == null) {
+      return null;
+    }
+    File file = new File(path);
+    return (file.isFile() && file.canRead()) ? file.getAbsolutePath() : null;
+  }
+
+  private File volumeRoot(String uuid) {
+    try {
+      StorageManager sm = (StorageManager)getSystemService(Context.STORAGE_SERVICE);
+      for (StorageVolume volume : sm.getStorageVolumes()) {
+        if (uuid.equalsIgnoreCase(volume.getUuid())) {
+          return volume.getDirectory();
+        }
+      }
+    }
+    catch (Exception ignored) {
+    }
+    return null;
+  }
+
+  private String copyToCache(Uri uri) throws Exception {
+    File dir = new File(getCacheDir(), "opened");
+    dir.mkdirs();
+    File out = new File(dir, displayName(uri));
+    try (InputStream is = getContentResolver().openInputStream(uri);
+         OutputStream os = new FileOutputStream(out)) {
+      if (is == null) {
+        return null;
+      }
+      byte[] buf = new byte[65536];
+      int n;
+      while ((n = is.read(buf)) > 0) {
+        os.write(buf, 0, n);
+      }
+    }
+    Log.w(TAG, "no path behind " + uri + "; opening a copy, relative links will not resolve");
+    return out.getAbsolutePath();
+  }
+
+  /* A provider-supplied name is untrusted: it can carry separators or "..". Keep
+   * the basename and nothing else. */
+  private String displayName(Uri uri) {
+    String name = null;
+    try (Cursor c = getContentResolver().query(
+             uri, new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+      if (c != null && c.moveToFirst() && !c.isNull(0)) {
+        name = c.getString(0);
+      }
+    }
+    catch (Exception ignored) {
+    }
+    if (name == null || name.isEmpty()) {
+      name = "opened.blend";
+    }
+    name = new File(name).getName().replace("..", "_");
+    return name.toLowerCase().endsWith(".blend") ? name : name + ".blend";
   }
 
   /* Hide the status/navigation bars so they don't overlap Blender's own menus
@@ -206,6 +410,69 @@ public class BlenderActivity extends NativeActivity {
     }
   }
 
+  /* Put the names of the device and its chip where Blender's Python can read them.
+   *
+   * Neither is readable from the Linux side of the process. /proc/cpuinfo carries no model name
+   * on arm64, /sys/devices/soc0/machine is labelled vendor_sysfs_soc and closed to apps, and
+   * /proc/device-tree/model is closed to everything. Build.SOC_MODEL is the same value the
+   * platform reads out of ro.soc.model, and it is free here.
+   *
+   * Passed as environment variables because the process already sets some, a few lines above,
+   * and os.environ costs the reading end nothing -- no JNI, no new RNA, no native call. Anything
+   * missing is left unset rather than set to a placeholder, so the panel can leave the line out
+   * instead of printing "unknown". */
+  private void publishHardwareNames() {
+    try {
+      /* Build.MANUFACTURER is lower case -- "samsung" -- which reads as a typo beside a chip
+       * vendor that is not. */
+      String device = joinNonEmpty(capitalize(Build.MANUFACTURER), Build.MODEL);
+      if (!device.isEmpty()) {
+        Os.setenv("BLENDER_ANDROID_DEVICE", device, true);
+      }
+
+      /* "QTI" is what Qualcomm parts report, and it is not a name anybody recognises. */
+      String vendor = Build.SOC_MANUFACTURER;
+      if ("QTI".equalsIgnoreCase(vendor)) {
+        vendor = "Qualcomm";
+      }
+      String soc = joinNonEmpty(vendor, Build.SOC_MODEL);
+      if (!soc.isEmpty()) {
+        Os.setenv("BLENDER_ANDROID_SOC", soc, true);
+      }
+    }
+    catch (Exception ex) {
+      /* Cosmetic. The panel simply leaves out whatever did not arrive. */
+      Log.w(TAG, "hardware names unavailable", ex);
+    }
+  }
+
+  private static String capitalize(String text) {
+    if (text == null || text.isEmpty()) {
+      return text;
+    }
+    return Character.toUpperCase(text.charAt(0)) + text.substring(1);
+  }
+
+  /* Build fields report the literal string "unknown" when they are not set, which is worse than
+   * nothing: it would be printed. */
+  private static String joinNonEmpty(String a, String b) {
+    StringBuilder out = new StringBuilder();
+    for (String part : new String[] {a, b}) {
+      if (part == null) {
+        continue;
+      }
+      part = part.trim();
+      if (part.isEmpty() || part.equalsIgnoreCase(Build.UNKNOWN)) {
+        continue;
+      }
+      if (out.length() != 0) {
+        out.append(' ');
+      }
+      out.append(part);
+    }
+    return out.toString();
+  }
+
   private static void writeText(File out, String text) throws Exception {
     try (OutputStream os = new FileOutputStream(out)) {
       os.write(text.getBytes("UTF-8"));
@@ -272,6 +539,34 @@ public class BlenderActivity extends NativeActivity {
     }
     catch (Exception ex) {
       throw new RuntimeException("Failed to extract Blender runtime", ex);
+    }
+  }
+
+  /* Called from native (GHOST_android_open_url).
+   *
+   * Every link in Blender -- the About box, "Online Manual" on a tool's context menu,
+   * the manual buttons in Preferences -- ends at wm.url_open, which calls Python's
+   * webbrowser.open(). That module looks for xdg-open, gio and x-www-browser with
+   * shutil.which(), finds none of them on Android, and returns False without a word:
+   * no browser, no error, no log line. Handing the URL to the platform is the only
+   * way any of those links can work.
+   *
+   * FLAG_ACTIVITY_NEW_TASK because the browser belongs in its own task, and because
+   * the call arrives on Blender's thread rather than through an Activity context.
+   * Returns whether the intent was accepted, so the operator can report a failure
+   * rather than repeating the silence this replaces. */
+  public boolean openUrl(String url) {
+    try {
+      Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+      startActivity(intent);
+      return true;
+    }
+    catch (Exception ex) {
+      /* ActivityNotFoundException when the device has no browser at all, and a
+       * SecurityException if one refuses the intent. */
+      Log.w(TAG, "cannot open " + url, ex);
+      return false;
     }
   }
 

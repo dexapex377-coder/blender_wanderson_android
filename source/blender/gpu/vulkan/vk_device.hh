@@ -494,6 +494,8 @@ class VKDevice : public NonCopyable {
   Span<std::reference_wrapper<VKContext>> contexts_get() const;
 
   void memory_statistics_get(int *r_total_mem_kb, int *r_free_mem_kb) const;
+  /** Touch: false for a heap only protected memory types point at; see the definition. */
+  bool memory_heap_is_allocatable(uint32_t memory_heap_index) const;
   void debug_print() const;
 
   /** \} */

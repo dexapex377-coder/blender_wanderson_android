@@ -1422,6 +1422,21 @@ static ARegion *tooltip_create_with_data(bContext *C,
                                          const float init_position[2],
                                          const rcti *init_rect_overlap)
 {
+  /* Touch: measure the tooltip at the scale it will be drawn at.
+   *
+   * A tooltip lives in a #RGN_TYPE_TEMPORARY region, which #ED_region_uses_menu_scale() counts as
+   * chrome, so it is drawn at the menu scale. Its box, though, is measured here: BLF_size() is set
+   * from UI_SCALE_FAC and every field is measured with BLF_width(), and this runs outside any
+   * guard. So the box was sized for type a third smaller than the type that went into it, and the
+   * text ran out of the right-hand edge -- "Select items using box s" on a tool with a description
+   * two words longer than the box could hold.
+   *
+   * The same mistake as the squeezed context menus and search boxes, in a fourth place: a size and
+   * the scale it was computed at disagreeing. See the note above the interface defaults table in
+   * ANDROID_AI_GUIDE.md. Everything below reads UI_SCALE_FAC, so holding the scale for the whole
+   * function is what keeps the measurement and the drawing in step. */
+  const ScopedMenuScale tooltip_scale(ED_ui_menu_scale());
+
   wmWindow *win = CTX_wm_window(C);
   const int2 win_size = WM_window_native_pixel_size(win);
   rcti rect_i;

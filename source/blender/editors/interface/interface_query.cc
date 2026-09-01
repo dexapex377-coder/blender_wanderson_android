@@ -181,6 +181,17 @@ int button_icon(const Button *but)
     return ICON_PREVIEW_LOADING;
   }
 
+  /* Touch: the collapsed top bar button says whether it is open.
+   *
+   * Only the one icon pair, and only on the button that carries it, so nothing else in the
+   * interface changes. It is done here rather than in the layout that builds the button because
+   * Python cannot see the open state, and because the header rebuilds its layout on every redraw
+   * -- so an icon chosen here tracks the state without anything having to invalidate it.
+   * See ANDROID_TOUCH_UI_SCALE_STUDY.md. */
+  if (but->icon == ICON_COLLAPSEMENU && ui_but_menu_is_open(but)) {
+    return ICON_KEY_MENU_FILLED;
+  }
+
   /* Consecutive icons can be toggle between. */
   if (but->drawflag & BUT_ICON_REVERSE) {
     return but->icon - but->iconadd;

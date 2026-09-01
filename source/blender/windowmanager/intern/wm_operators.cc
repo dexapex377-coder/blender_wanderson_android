@@ -2106,6 +2106,16 @@ static wmOperatorStatus wm_search_menu_exec(bContext * /*C*/, wmOperator * /*op*
   return OPERATOR_FINISHED;
 }
 
+/** The height the search popup has to stay above: the on-screen keyboard, or the window floor. */
+static int wm_search_menu_floor(const bContext *C)
+{
+  rcti keyboard;
+  if (WM_virtual_keyboard_rect_get(CTX_wm_window(const_cast<bContext *>(C)), &keyboard)) {
+    return keyboard.ymax;
+  }
+  return 0;
+}
+
 static wmOperatorStatus wm_search_menu_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
   /* Exception for launching via space-bar. */
@@ -2158,8 +2168,42 @@ static wmOperatorStatus wm_search_menu_invoke(bContext *C, wmOperator *op, const
   }
 
   data.search_type = search_type;
-  data.size[0] = ui::searchbox_size_x() * 2;
-  data.size[1] = ui::searchbox_size_y();
+  {
+    /* Touch: measured at the menu scale, because that is what the block will be drawn at.
+     *
+     * wm_block_search_menu() runs inside popup_block_refresh(), which applies the scale, so its
+     * widgets come out scaled -- but the two sizes it lays them into are taken from here, where
+     * nothing had been applied. The one that shows is the height: it is the space the search
+     * results are given, the row count is fixed at SEARCH_ITEMS, so an unscaled height divided by
+     * ten put the rows at two thirds of what the text in them was drawn at. The same squeeze, and
+     * the same ratio, as the button context menus. */
+    const ScopedMenuScale menu_scale(ED_ui_menu_scale());
+    data.size[0] = ui::searchbox_size_x() * 2;
+
+    /* Touch: and only as tall as the room actually left for it.
+     *
+     * The row count used to be fixed at ten whatever the room, and the row height is the box
+     * divided by that count, so a box squeezed into a short window came out as ten unreadable
+     * rows. Measuring the room and asking for a whole number of rows gives four readable ones
+     * instead, which is worth more than ten that cannot be read.
+     *
+     * Two things eat the room, and both are counted here rather than only the obvious one. The
+     * on-screen keyboard is the loud case: it takes the bottom of the screen and the popup spawns
+     * at the finger, so the results landed underneath the thing typing into them. The quiet case
+     * is the window itself -- a Blender sharing the screen with another app in Android's split
+     * view has half the height and no keyboard to blame.
+     *
+     * What is subtracted is what the block carries besides the results: the search field, and the
+     * padding block_bounds_set_popup() adds below. The floor is #searchbox_size_y_fit's, two rows,
+     * and it is a floor rather than a clamp on purpose -- the field has to stay whole even when
+     * that means the popup runs into the keyboard again. A search you cannot type into is worse
+     * than one whose last row is covered. */
+    /* Half a unit for the popup's top margin: UI_POPUP_MENU_TOP itself lives in an editors
+     * header the window manager does not include, and it is within a pixel of this. */
+    const int ceiling = WM_window_native_pixel_y(CTX_wm_window(C)) - UI_UNIT_Y / 2;
+    const int room = ceiling - wm_search_menu_floor(C) - UI_UNIT_Y - 2 * UI_SEARCHBOX_BOUNDS;
+    data.size[1] = ui::searchbox_size_y_fit(room);
+  }
 
   popup_block_invoke_ex(C, wm_block_search_menu, &data, nullptr, false);
 
@@ -2438,6 +2482,55 @@ static void WM_OT_window_new_main(wmOperatorType *ot)
   ot->exec = wm_window_new_main_exec;
   ot->poll = wm_operator_winactive_normal;
 }
+
+#ifdef __ANDROID__
+
+/* -------------------------------------------------------------------- */
+/** \name Open a URL through the platform (Android)
+ *
+ * Every link in the program goes through `wm.url_open`, which calls Python's
+ * `webbrowser.open()`. That module hunts for `xdg-open`, `gio` and `x-www-browser` with
+ * `shutil.which()`, finds none of them on Android, and returns False without raising or
+ * logging anything: the About box links, "Online Manual" on a tool's context menu and the
+ * manual buttons in Preferences all did nothing at all, silently.
+ *
+ * This is the way out, and it is registered with Python's `webbrowser` rather than wired
+ * into `wm.url_open` directly, so that add-ons and #url_prefill_startup reach it too.
+ * See `scripts/startup/bl_android_browser.py`.
+ * \{ */
+
+/* Implemented in GHOST_SystemAndroid.cc. Declared here rather than in a header because the
+ * window manager cannot include GHOST's private headers -- `creator.cc` reaches
+ * #GHOST_HACK_getFirstFile the same way on macOS. */
+extern "C" bool GHOST_android_open_url(const char *url);
+
+static wmOperatorStatus wm_platform_url_open_exec(bContext * /*C*/, wmOperator *op)
+{
+  const std::string url = RNA_string_get(op->ptr, "url");
+  const bool success = !url.empty() && GHOST_android_open_url(url.c_str());
+  if (!success) {
+    /* Saying so is the point: the failure this replaces was completely silent. */
+    BKE_report(op->reports, RPT_ERROR, "Could not open the link");
+  }
+  return success ? OPERATOR_FINISHED : OPERATOR_CANCELLED;
+}
+
+static void WM_OT_platform_url_open(wmOperatorType *ot)
+{
+  ot->name = "Open URL";
+  ot->idname = "WM_OT_platform_url_open";
+  ot->description = "Hand a URL to the browser the device has";
+
+  ot->exec = wm_platform_url_open_exec;
+
+  ot->flag = OPTYPE_INTERNAL;
+
+  RNA_def_string(ot->srna, "url", nullptr, 0, "URL", "URL to open");
+}
+
+/** \} */
+
+#endif /* __ANDROID__ */
 
 static void WM_OT_window_fullscreen_toggle(wmOperatorType *ot)
 {
@@ -4278,6 +4371,9 @@ void wm_operatortypes_register()
   WM_operatortype_append(WM_OT_read_factory_userpref);
   WM_operatortype_append(WM_OT_window_fullscreen_toggle);
   WM_operatortype_append(WM_OT_virtual_keyboard_toggle);
+#ifdef __ANDROID__
+  WM_operatortype_append(WM_OT_platform_url_open);
+#endif
   WM_operatortype_append(WM_OT_quit_blender);
   WM_operatortype_append(WM_OT_open_mainfile);
   WM_operatortype_append(WM_OT_revert_mainfile);

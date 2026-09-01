@@ -1813,6 +1813,14 @@ void blo_do_versions_userdef(UserDef *userdef)
   }
 #endif
 
+  if (!USER_VERSION_ATLEAST(503, 14)) {
+    /* Menu scale did not exist before this, so a preferences file written by any earlier build
+     * reads back 0 -- which is now a legitimate setting meaning "no extra size", not a missing
+     * value. The two cannot be told apart after the fact, so it has to be done by subversion:
+     * anyone upgrading gets the touch default, and anyone who later turns it off keeps it off. */
+    userdef->ui_scale_menu = USER_UI_SCALE_MENU_DEFAULT;
+  }
+
   /**
    * Always bump subversion in BKE_blender_version.h when adding versioning
    * code here, and wrap it inside a USER_VERSION_ATLEAST check.

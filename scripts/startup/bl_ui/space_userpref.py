@@ -229,6 +229,7 @@ class USERPREF_PT_interface_display(InterfacePanel, CenterAlignMixIn, Panel):
         col = layout.column()
 
         col.prop(view, "ui_scale", text="Resolution Scale")
+        col.prop(view, "ui_scale_menu", text="Menu Scale")
         col.prop(view, "ui_line_width", text="Line Width")
         col.prop(view, "show_splash", text="Splash Screen")
         col.prop(view, "show_developer_ui")
@@ -717,6 +718,135 @@ class USERPREF_PT_system_sound(SystemPanel, CenterAlignMixIn, Panel):
         sub.prop(system, "audio_sample_format", text="Sample Format")
 
 
+def _device_hardware_groups():
+    """Touch: what the machine actually is, for the Cycles device panel.
+
+    On a phone that panel is a single button reading "None", which means "no GPU compute device"
+    and reads as "no hardware". Everything below it is what the desktop panel gets from the device
+    list, and a phone has nothing to fill it in with, so it is filled in from what the system will
+    say about itself.
+
+    Returns a list of groups, each a list of (label, value) pairs, so the caller can put a little
+    air between them. A pair with an empty label continues the one above it.
+
+    The device and chip names come from BlenderActivity, which reads them off android.os.Build and
+    sets them in the environment: nothing on the Linux side of the process can see them, since
+    /proc/cpuinfo carries no model name on arm64 and the sysfs and device-tree paths that do are
+    closed to apps.
+
+    Read once and kept. Nothing here changes while Blender is running.
+
+    Every read stands alone. A line whose source is missing or unreadable is left out rather than
+    guessed at, because nothing here is worth an exception during a draw.
+    """
+    cache = _device_hardware_groups._cache
+    if cache is not None:
+        return cache
+
+    import os
+
+    identity = []
+
+    for label, key in (("Device", "BLENDER_ANDROID_DEVICE"), ("Processor", "BLENDER_ANDROID_SOC")):
+        value = os.environ.get(key, "").strip()
+        if value:
+            identity.append((label, value))
+
+    # GPU. Blender already knows this one, from the device it is drawing with.
+    try:
+        import gpu
+        renderer = gpu.platform.renderer_get().strip()
+        if renderer:
+            identity.append(("GPU", renderer))
+    except Exception:
+        pass
+
+    # Cores. The count only: which cluster runs at what clock is real, and read correctly, but it
+    # is four more lines to say something nobody chooses a render device on.
+    try:
+        count = 0
+        with open("/proc/cpuinfo", "r") as f:
+            for line in f:
+                if line.startswith("processor"):
+                    count += 1
+        if count == 0:
+            count = os.cpu_count() or 0
+        if count:
+            identity.append(("Cores", "{:d}".format(count)))
+    except Exception:
+        pass
+
+    groups = []
+    if identity:
+        groups.append(identity)
+
+    # Memory: what was fitted and what the kernel kept, with what Blender may actually have added
+    # live by the caller. Three figures that disagree, and none of the disagreements is a mistake.
+    #
+    # MemTotal is what the kernel has left after the firmware, the modem and the display carve out
+    # their reservations, so a 12 GB phone reports around 10.8 GiB of it. Neither Linux nor Android
+    # will say what was fitted, so the headline number is the nearest capacity a phone is actually
+    # sold with -- inferred, and printed beside the figure it was inferred from rather than instead
+    # of it.
+    try:
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                if key != "MemTotal":
+                    continue
+                total_gib = int(rest.strip().split()[0]) / 1048576.0
+                fitted = next(
+                    (size for size in (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64)
+                     if size >= total_gib),
+                    None,
+                )
+                memory = []
+                if fitted is not None:
+                    memory.append(("Memory", "{:d} GB fitted".format(fitted)))
+                    memory.append(("", "{:.1f} GB to the system".format(total_gib)))
+                else:
+                    memory.append(("Memory", "{:.1f} GB to the system".format(total_gib)))
+                groups.append(memory)
+                break
+    except Exception:
+        pass
+
+    if groups:
+        _device_hardware_groups._cache = groups
+    return groups
+
+
+_device_hardware_groups._cache = None
+
+
+def _device_memory_available():
+    """Touch: how much graphics memory Blender may actually use, as a row for the device panel.
+
+    The third memory figure, and the only one of the three that decides whether a scene fits. It
+    comes from the same call the status bar reports, so the panel and the status bar agree by
+    construction rather than by being kept in step by hand.
+
+    On a phone there is no separate graphics memory. The driver hands out a share of the one pool,
+    which is also Android's and every other app's, and it is a good deal smaller than the RAM the
+    phone was sold with: a device-local heap covering all of system memory, minus what the driver
+    will not promise. Reported alongside the other two so the gap is visible rather than puzzling.
+
+    Deliberately not cached with the static facts: those never change while Blender runs, this one
+    can. Returns None where the backend will not report it.
+    """
+    try:
+        import gpu
+        stats = gpu.capabilities.memory_statistics_get()
+    except Exception:
+        return None
+
+    if not stats:
+        return None
+
+    total_kb, _in_use_kb = stats
+    return ("", "{:.1f} GB for Blender".format(total_kb / 1048576.0))
+
+
 class USERPREF_PT_system_cycles_devices(SystemPanel, CenterAlignMixIn, Panel):
     bl_label = "Cycles Render Devices"
 
@@ -726,15 +856,56 @@ class USERPREF_PT_system_cycles_devices(SystemPanel, CenterAlignMixIn, Panel):
         col = layout.column()
         col.use_property_split = False
 
+        # Touch: "None" is the only compute device a phone offers, and on its own it says nothing
+        # about what the rendering will actually run on. Whatever the device will tell us about
+        # itself goes underneath it, in place of the device list the desktop fills this panel with.
+        show_hardware = True
+
         if bpy.app.build_options.cycles:
             addon = prefs.addons.get("cycles")
             if addon is None:
                 layout.label(text="Enable Cycles Render Engine add-on to use Cycles", icon='STATUS_INFO')
             else:
                 addon.preferences.draw_impl(col, context)
+                try:
+                    # Only where the device list left the panel empty. With a GPU compute device
+                    # selected the list already names the hardware, one line per device.
+                    show_hardware = addon.preferences.compute_device_type == 'NONE'
+                except Exception:
+                    pass
             del addon
         else:
             layout.label(text="Cycles is disabled in this build", icon='STATUS_INFO')
+
+        if show_hardware:
+            try:
+                hardware = _device_hardware_groups()
+            except Exception:
+                hardware = []
+
+            # Touch: the live figure joins the memory group, which is the last one.
+            available = _device_memory_available()
+            if hardware and available:
+                hardware = hardware[:-1] + [hardware[-1] + [available]]
+
+            if hardware:
+                box = layout.box()
+                box.label(text="Rendering on the CPU")
+
+                # A two column table, laid out with a split rather than a row so the labels line
+                # up with each other instead of with whatever happens to be beside them. Held
+                # upright the panel is narrow, which is why every value is short enough to sit on
+                # one line and the clocks are one line each.
+                table = box.column(align=True)
+                for index, group in enumerate(hardware):
+                    if index != 0:
+                        table.separator()
+                    for label, value in group:
+                        split = table.split(factor=0.35)
+                        left = split.row()
+                        left.alignment = 'RIGHT'
+                        left.label(text=label)
+                        split.label(text=value, translate=False)
 
 
 class USERPREF_PT_system_display_graphics(SystemPanel, CenterAlignMixIn, Panel):
@@ -773,9 +944,23 @@ class USERPREF_PT_system_os_settings(SystemPanel, CenterAlignMixIn, Panel):
 
     @classmethod
     def poll(cls, _context):
+        import sys
         # macOS isn't supported.
-        from sys import platform
-        if platform == "darwin":
+        if sys.platform == "darwin":
+            return False
+        # Touch: nor is Android, which reports as "linux" and so was offered the
+        # freedesktop path. That shells out to xdg-mime, which does not exist on the
+        # platform and has no per-user MIME database to write to, so Register could only
+        # ever report "Could not find xdg-mime, unable to associate mime-types".
+        #
+        # Nothing is missing: a .blend tapped in a file manager already opens here. The
+        # association is an intent filter declared in the APK manifest, fixed at build
+        # time, and not something an app can register or unregister at runtime -- so
+        # this panel has nothing it could do even if the command existed.
+        #
+        # sys.getandroidapilevel is CPython's own marker and exists only on an Android
+        # build of the interpreter.
+        if hasattr(sys, "getandroidapilevel"):
             return False
         return True
 

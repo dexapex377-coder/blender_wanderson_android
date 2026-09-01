@@ -996,20 +996,25 @@ void popup_block_invoke(bContext *C,
                         BlockCreateFunc func,
                         void *arg,
                         FreeArgFunc arg_free,
-                        StructRNA *srna_owner = nullptr);
+                        StructRNA *srna_owner = nullptr,
+                        bool use_menu_scale = true);
 /**
  * \param can_refresh: When true, the popup may be refreshed (updated after creation).
  * \note It can be useful to disable refresh (even though it will work)
  * as this exits text fields which can be disruptive if refresh isn't needed.
  * \param srna_owner: The StructRNA type that owns this popup, this popup should be removed if this
  * type gets unregistered.
+ * \param use_menu_scale: Whether the popup is drawn at the touch menu scale, see
+ * #ED_ui_menu_scale. True for anything a finger aims at. False for fixed-proportion artwork such
+ * as the splash screen, which runs out of screen before it runs out of scale.
  */
 void popup_block_invoke_ex(bContext *C,
                            BlockCreateFunc func,
                            void *arg,
                            FreeArgFunc arg_free,
                            bool can_refresh,
-                           StructRNA *srna_owner = nullptr);
+                           StructRNA *srna_owner = nullptr,
+                           bool use_menu_scale = true);
 void popup_block_ex(bContext *C,
                     BlockCreateFunc func,
                     BlockHandleFunc popup_func,
@@ -1896,6 +1901,16 @@ void button_func_search_set_results_are_suggestions(Button *but, bool value);
  * Height in pixels, it's using hard-coded values still.
  */
 int searchbox_size_y();
+/**
+ * The tallest search box that fits in `height_max` and still holds whole rows.
+ *
+ * Touch: a phone can leave less room than the ten rows a desktop shows -- the on-screen keyboard
+ * takes the bottom of the screen, and a window in Android's split screen takes half of what is
+ * left. Returns a height that is a whole number of rows so they come out full size rather than
+ * ten squeezed ones, and never fewer than two, which is the point below which the list stops
+ * being a list.
+ */
+int searchbox_size_y_fit(int height_max);
 int searchbox_size_x();
 /**
  * Guess a good width for the search box based on the searchable items.

@@ -5068,6 +5068,22 @@ static void rna_def_userdef_view(BlenderRNA *brna)
   RNA_def_property_ui_range(prop, 0.5f, 3.0f, 1, 2);
   RNA_def_property_update(prop, 0, "rna_userdef_gpu_and_text_update");
 
+  prop = RNA_def_property(srna, "ui_scale_menu", PROP_FLOAT, PROP_FACTOR);
+  RNA_def_property_ui_text(prop,
+                           "Menu Scale",
+                           "Extra size for headers, menus, navigation bars and tool bars, as a "
+                           "fraction on top of Resolution Scale. 0.5 draws them half again as "
+                           "large, 0 leaves them at Resolution Scale. Editor contents are never "
+                           "affected");
+  RNA_def_property_range(prop, 0.0f, 1.0f);
+  RNA_def_property_ui_range(prop, 0.0f, 1.0f, 1, 2);
+  /* Stated here rather than picked up from the DNA default, for the same reason as
+   * "pressure_threshold_max" further down this file: makesrna is a host tool, so the header it
+   * read was compiled without __ANDROID__ and offered 1.0. That number is what "Reset to Default
+   * Value" would hand back, disagreeing with what a fresh install on the phone starts on. */
+  RNA_def_property_float_default(prop, USER_UI_SCALE_MENU_ANDROID);
+  RNA_def_property_update(prop, 0, "rna_userdef_gpu_and_text_update");
+
   prop = RNA_def_property(srna, "border_width", PROP_INT, PROP_NONE);
   RNA_def_property_ui_text(prop, "Border Width", "Size of the padding around each editor.");
   RNA_def_property_range(prop, 1.0f, 10.0f);

@@ -11,6 +11,68 @@ from bpy.app.translations import (
 )
 
 
+def _topbar_is_upright(context):
+    """Touch: is the window taller than it is wide?
+
+    Only the scene and view layer fields still ask: the menu itself is folded in both
+    orientations now. Upright there is far less width to give those two fields, so that is where
+    they are squeezed. See ANDROID_TOUCH_UI_SCALE_STUDY.md.
+    """
+    window = context.window
+    return window is not None and window.height > window.width
+
+
+class TOPBAR_MT_touch_menu(Menu):
+    """Touch: the editor pull-downs and the workspaces, in one menu.
+
+    Folded in both orientations, not only upright. It started as the answer to a phone held
+    upright, where five pull-downs and eleven tabs had no chance of fitting -- but a tab strip
+    that shows three and a half of eleven, cut mid-word, is not much better, and one button that
+    always behaves the same way beats a bar that rearranges itself when the device turns.
+
+    The active workspace is drawn depressed, so the list is its own indicator and nothing is lost
+    by dropping the tabs.
+    """
+    bl_idname = "TOPBAR_MT_touch_menu"
+    bl_label = "Menu"
+
+    def draw(self, context):
+        layout = self.layout
+
+        layout.menu("TOPBAR_MT_file", icon='FILE')
+        layout.menu("TOPBAR_MT_edit", icon='GREASEPENCIL')
+        layout.menu("TOPBAR_MT_render", icon='RENDER_STILL')
+        layout.menu("TOPBAR_MT_window", icon='WINDOW')
+        layout.menu("TOPBAR_MT_help", icon='QUESTION')
+        # Last rather than first, unlike the desktop bar where it is the leftmost icon: splash,
+        # about, application templates and system information are the entries reached least, and
+        # putting them at the end keeps File and Edit under the thumb that just opened the menu.
+        layout.menu("TOPBAR_MT_blender", icon='BLENDER')
+
+        layout.separator()
+
+        # Sorted the way the tab strip is, which is the deliberate workflow order rather than
+        # the alphabetical one bpy.data is in. WorkSpace.order is what BKE_id_ordered_list()
+        # sorts the tabs by.
+        active = context.window.workspace
+        for workspace in sorted(bpy.data.workspaces, key=lambda ws: ws.order):
+            props = layout.operator(
+                "wm.context_set_id",
+                text=workspace.name,
+                translate=False,
+                depress=(workspace == active),
+            )
+            props.data_path = "window.workspace"
+            props.value = workspace.name
+
+        # The "+" at the end of the desktop tab strip, which folding the strip away took with it.
+        # The menu itself rather than workspace.add: the operator only exists to pop this menu up,
+        # so calling it from inside a menu would close this one to open that one, while a submenu
+        # nests the way every other entry here does.
+        layout.separator()
+        layout.menu("WORKSPACE_MT_add", text="Add Workspace", icon='ADD')
+
+
 class TOPBAR_HT_upper_bar(Header):
     bl_space_type = 'TOPBAR'
 
@@ -25,17 +87,29 @@ class TOPBAR_HT_upper_bar(Header):
     def draw_left(self, context):
         layout = self.layout
 
-        window = context.window
         screen = context.screen
 
-        TOPBAR_MT_editor_menus.draw_collapsible(context, layout)
+        # Touch: one button in place of the pull-downs and the tab strip both, in either
+        # orientation. The icon is swapped for KEY_MENU_FILLED while the menu is open, natively
+        # -- a Python layout cannot see that state. See ui_but_menu_is_open().
+        layout.menu("TOPBAR_MT_touch_menu", text="", icon='COLLAPSEMENU')
 
-        layout.separator(type='LINE')
+        # Touch: undo and redo, which are the two things reached for most often and the two the
+        # keyboard is worst at here -- Ctrl+Z means opening the on-screen keyboard, holding a
+        # modifier and finding Z. The room the folded menu freed is worth spending on them.
+        # Both operators poll, so each greys out when there is nothing to undo or redo.
+        row = layout.row(align=True)
+        row.operator("ed.undo", text="", icon='LOOP_BACK')
+        row.operator("ed.redo", text="", icon='LOOP_FORWARDS')
 
-        if not screen.show_fullscreen:
-            layout.template_ID_tabs(window, "workspace", new="workspace.add", menu="TOPBAR_MT_workspace_menu")
-        else:
-            layout.operator("screen.back_to_previous", icon='SCREEN_BACK', text="Back to Previous")
+        if screen.show_fullscreen:
+            # Touch: the label costs width the folded bar cannot spare upright, where this button
+            # shares the row with the menu and the two undo arrows. Turned with the device: wide
+            # enough and it says what it does again, which an arrow into a rectangle does not.
+            if _topbar_is_upright(context):
+                layout.operator("screen.back_to_previous", icon='SCREEN_BACK', text="")
+            else:
+                layout.operator("screen.back_to_previous", icon='SCREEN_BACK')
 
     def draw_right(self, context):
         layout = self.layout
@@ -49,10 +123,25 @@ class TOPBAR_HT_upper_bar(Header):
             layout.template_reports_banner()
             layout.template_running_jobs()
 
+        # Touch: the name fields sit at a four unit floor whatever the name is, and "Scene" and
+        # "ViewLayer" are far shorter than that. Upright those two floors are most of the width
+        # the rest of the bar needs, so both are held to a width that takes the difference out of
+        # the typable part and leaves the icons around them alone.
+        #
+        # Both rows get the same width, which is what makes the two fields read as a pair. Seven
+        # is the floor: the scene row carries a pin button the view layer row has no equivalent
+        # of, and at six it was the scene name that ran out of room and showed as "S...".
+        upright = _topbar_is_upright(context)
+
         # Active workspace view-layer is retrieved through window, not through workspace.
-        layout.template_ID(window, "scene", new="scene.new", unlink="scene.delete")
+        scene_row = layout.row(align=True)
+        if upright:
+            scene_row.ui_units_x = 7
+        scene_row.template_ID(window, "scene", new="scene.new", unlink="scene.delete")
 
         row = layout.row(align=True)
+        if upright:
+            row.ui_units_x = 7
         row.template_search(
             window, "view_layer",
             scene, "view_layers",
@@ -865,6 +954,7 @@ class TOPBAR_PT_grease_pencil_layers(Panel):
 
 classes = (
     TOPBAR_HT_upper_bar,
+    TOPBAR_MT_touch_menu,
     TOPBAR_MT_file_context_menu,
     TOPBAR_MT_workspace_menu,
     TOPBAR_MT_editor_menus,

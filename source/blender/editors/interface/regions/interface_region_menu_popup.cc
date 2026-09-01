@@ -12,6 +12,7 @@
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <functional>
 
 #include "MEM_guardedalloc.h"
@@ -170,6 +171,23 @@ struct PopupMenu {
   bool popup, slideout;
 
   std::function<void(bContext *C, Layout *layout)> menu_func;
+
+  /**
+   * Touch: held only by the begin-and-end path, for as long as the caller is adding items.
+   *
+   * A menu built from a #menu_func is built inside popup_block_refresh(), which already applies
+   * the touch menu scale, so its rows come out the size the popup was drawn at. A menu built
+   * between popup_menu_begin() and popup_menu_end() is built where the caller stands -- in the
+   * middle of handling an event -- where no scale is applied, so every button was sized against
+   * the unscaled widget unit and then drawn inside a popup that had been scaled. That is a
+   * button context menu at two thirds the row height of a pull-down, text crowding its own rows.
+   *
+   * Held here rather than around each call because the items are added by the caller, between the
+   * two, and released by this struct being deleted -- which every path does, the cancel included.
+   * Null for the #menu_func path, where the struct outlives the build and holding it would leave
+   * the whole interface scaled for as long as the menu was open.
+   */
+  std::unique_ptr<ScopedMenuScale> menu_scale;
 };
 
 /**
@@ -479,6 +497,10 @@ PopupMenu *popup_menu_begin_ex(bContext *C, const char *title, const char *block
 
   pup->title = title;
 
+  /* Touch: from here until this struct is deleted, so the items the caller is about to add are
+   * sized the way the popup they land in will be drawn. */
+  pup->menu_scale = std::make_unique<ScopedMenuScale>(ED_ui_menu_scale());
+
   popup_menu_create_block(C, pup, title, block_name);
 
   /* create in advance so we can let buttons point to retval already */
@@ -676,7 +698,8 @@ void popup_block_invoke_ex(bContext *C,
                            void *arg,
                            FreeArgFunc arg_free,
                            const bool can_refresh,
-                           StructRNA *srna_owner)
+                           StructRNA *srna_owner,
+                           const bool use_menu_scale)
 {
   wmWindow *window = CTX_wm_window(C);
 
@@ -685,7 +708,7 @@ void popup_block_invoke_ex(bContext *C,
 #endif
 
   PopupBlockHandle *handle = popup_block_create(
-      C, nullptr, nullptr, func, nullptr, arg, arg_free, can_refresh);
+      C, nullptr, nullptr, func, nullptr, arg, arg_free, can_refresh, use_menu_scale);
   handle->popup = true;
   handle->srna_owner = srna_owner;
 
@@ -699,10 +722,14 @@ void popup_block_invoke_ex(bContext *C,
   WM_event_add_mousemove(window);
 }
 
-void popup_block_invoke(
-    bContext *C, BlockCreateFunc func, void *arg, FreeArgFunc arg_free, StructRNA *srna_owner)
+void popup_block_invoke(bContext *C,
+                        BlockCreateFunc func,
+                        void *arg,
+                        FreeArgFunc arg_free,
+                        StructRNA *srna_owner,
+                        const bool use_menu_scale)
 {
-  popup_block_invoke_ex(C, func, arg, arg_free, true, srna_owner);
+  popup_block_invoke_ex(C, func, arg, arg_free, true, srna_owner, use_menu_scale);
 }
 
 void popup_block_ex(bContext *C,

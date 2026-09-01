@@ -23,6 +23,7 @@
 
 #include "AS_asset_library.hh"
 #include "AS_essentials_library.hh"
+#include "AS_remote_library.hh"
 #include "all_library.hh"
 #include "asset_catalog_collection.hh"
 #include "asset_catalog_definition_file.hh"  // IWYU pragma: keep
@@ -722,7 +723,9 @@ void AssetLibraryService::foreach_loaded_asset_library(FunctionRef<void(AssetLib
     }
   }
 
-  const bool include_remote_libraries = USER_EXPERIMENTAL_TEST(&U, use_remote_asset_libraries);
+  /* Touch: remote_libraries_supported() is the Android gate; see AS_remote_library.hh. */
+  const bool include_remote_libraries = remote_libraries_supported() &&
+                                        USER_EXPERIMENTAL_TEST(&U, use_remote_asset_libraries);
 
   if (include_remote_libraries && online_essentials_library_ &&
       (U.asset_flag & USER_ASSETS_USE_ONLINE_ESSENTIALS))

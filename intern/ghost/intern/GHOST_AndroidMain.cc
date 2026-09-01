@@ -15,6 +15,7 @@
 #include <android/log.h>
 #include <android_native_app_glue.h>
 #include <cstdio>
+#include <cstdlib>
 #include <jni.h>
 #include <pthread.h>
 #include <string>
@@ -142,10 +143,29 @@ static void on_app_cmd(android_app *app, int32_t cmd)
           argv.push_back(arg.c_str());
         }
         argv.push_back("--disable-crash-handler");
+        /* A .blend the system asked us to open, resolved to a path by BlenderActivity
+         * and left in the environment before the native thread started. Passed as an
+         * argument rather than opened afterwards, so it is the file that loads instead
+         * of the startup file loading and being replaced -- the same route a
+         * double-clicked file takes into argv[1] on macOS. Blender's own fall-through
+         * argument handler (main_args_handle_load_file) takes it from here.
+         *
+         * Copied out rather than used in place: argv holds borrowed pointers and the
+         * unsetenv below would invalidate what getenv returned. */
+        std::string open_file;
+        if (const char *env = getenv("BLENDER_ANDROID_OPEN_FILE")) {
+          open_file = env;
+        }
+        if (!open_file.empty()) {
+          argv.push_back(open_file.c_str());
+        }
         for (const char *arg : argv) {
           __android_log_print(ANDROID_LOG_INFO, "blender", "[BlenderAndroid] argv: %s", arg);
         }
         blender::GHOST_android_launch(int(argv.size()), argv.data());
+        /* One launch only. A later tap arrives through onNewIntent instead, and must
+         * not find a stale path here. */
+        unsetenv("BLENDER_ANDROID_OPEN_FILE");
         g_blender_launched = true;
       }
       else if (GHOST_ISystem::getSystem()) {
@@ -205,6 +225,20 @@ extern "C" JNIEXPORT void JNICALL Java_org_blender_blender_BlenderActivity_nativ
   if (GHOST_SystemAndroid *system = android_system_if_ready()) {
     system->handleJavaKeyEvent(keycode, action, meta_state);
   }
+}
+
+/* A .blend tapped in a file manager while Blender is already running, forwarded from
+ * BlenderActivity.onNewIntent on the Android UI thread. */
+extern "C" JNIEXPORT void JNICALL Java_org_blender_blender_BlenderActivity_nativeOpenMainFile(
+    JNIEnv *env, jobject /*thiz*/, jstring path)
+{
+  GHOST_SystemAndroid *system = android_system_if_ready();
+  if (!system || !path) {
+    return;
+  }
+  const char *utf = env->GetStringUTFChars(path, nullptr);
+  system->handleOpenMainFile(utf);
+  env->ReleaseStringUTFChars(path, utf);
 }
 
 extern "C" void android_main(struct android_app *app)

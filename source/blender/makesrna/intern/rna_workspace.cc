@@ -460,6 +460,17 @@ static void rna_def_workspace(BlenderRNA *brna)
                                     nullptr);
   RNA_def_property_ui_text(prop, "Screens", "Screen layouts of a workspace");
 
+  /* Touch: the position of the workspace in the top bar tab strip, which is a deliberate order
+   * -- Layout, Modeling, Sculpting -- and not the alphabetical one the data-block list is in.
+   * The tab strip sorts by it through BKE_id_ordered_list(); nothing could until now, so a
+   * Python list of workspaces came out in the wrong order. Read-only: reordering is what
+   * WORKSPACE_OT_reorder_to_front and friends are for. */
+  prop = RNA_def_property(srna, "order", PROP_INT, PROP_NONE);
+  RNA_def_property_int_sdna(prop, nullptr, "order");
+  RNA_def_property_clear_flag(prop, PROP_EDITABLE);
+  RNA_def_property_ui_text(
+      prop, "Order", "Position of this workspace in the top bar, left to right");
+
   prop = RNA_def_property(srna, "owner_ids", PROP_COLLECTION, PROP_NONE);
   RNA_def_property_struct_type(prop, "wmOwnerID");
   RNA_def_property_ui_text(prop, "UI Tags", "");

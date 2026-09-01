@@ -16,6 +16,7 @@
 #include "GHOST_EventButton.hh"
 #include "GHOST_EventCursor.hh"
 #include "GHOST_EventKey.hh"
+#include "GHOST_EventString.hh"
 #include "GHOST_EventTrackpad.hh"
 #include "GHOST_EventWheel.hh"
 #include "GHOST_ModifierKeys.hh"
@@ -750,23 +751,47 @@ void GHOST_SystemAndroid::handleJavaKeyEvent(int32_t keycode, int32_t action, in
   java_keys_.push_back({keycode, action, meta_state});
 }
 
+void GHOST_SystemAndroid::handleOpenMainFile(const char *path)
+{
+  if (!path || !path[0]) {
+    return;
+  }
+  std::scoped_lock lock(java_input_mutex_);
+  java_open_files_.push_back(path);
+}
+
 void GHOST_SystemAndroid::drainJavaInput()
 {
   std::vector<std::string> text;
   std::vector<JavaKeyEvent> keys;
+  std::vector<std::string> open_files;
   {
     std::scoped_lock lock(java_input_mutex_);
-    if (java_text_.empty() && java_keys_.empty()) {
+    if (java_text_.empty() && java_keys_.empty() && java_open_files_.empty()) {
       return;
     }
     text.swap(java_text_);
     keys.swap(java_keys_);
+    open_files.swap(java_open_files_);
   }
   for (const std::string &string : text) {
     dispatchTextInput(string.c_str());
   }
   for (const JavaKeyEvent &key : keys) {
     dispatchJavaKeyEvent(key.keycode, key.action, key.meta_state);
+  }
+  for (const std::string &path : open_files) {
+    /* The handler in `wm_window.cc` drops any event without a valid window; before
+     * the surface exists there is nothing to attach this to. */
+    if (!window_) {
+      break;
+    }
+    /* #GHOST_EventString frees its data, so `strdup` is the matching allocator. */
+    pushEvent(std::make_unique<GHOST_EventString>(
+        getMilliSeconds(),
+        GHOST_kEventOpenMainFile,
+        window_,
+        static_cast<GHOST_TEventDataPtr>(strdup(path.c_str()))));
   }
 }
 
@@ -980,6 +1005,44 @@ static GHOST_TSuccess android_call_activity_void(android_app *app, const char *m
   }
   env->CallVoidMethod(activity, mid);
   return GHOST_kSuccess;
+}
+
+/* Call a method on the BlenderActivity instance that takes a string and returns a boolean. */
+static bool android_call_activity_bool_string(android_app *app,
+                                              const char *method,
+                                              const char *argument)
+{
+  if (!app || !app->activity || !app->activity->clazz || !argument) {
+    return false;
+  }
+  JNIEnv *env = android_jni_env(app);
+  if (!env) {
+    return false;
+  }
+  jobject activity = app->activity->clazz;
+  jmethodID mid = env->GetMethodID(env->GetObjectClass(activity), method, "(Ljava/lang/String;)Z");
+  if (!mid) {
+    env->ExceptionClear();
+    return false;
+  }
+  jstring arg = env->NewStringUTF(argument);
+  if (!arg) {
+    env->ExceptionClear();
+    return false;
+  }
+  const bool result = env->CallBooleanMethod(activity, mid, arg) == JNI_TRUE;
+  env->DeleteLocalRef(arg);
+  return result;
+}
+
+/* Hand a URL to whatever browser the device has.
+ *
+ * Declared where it is used rather than in a header, because the window manager cannot
+ * include GHOST's private headers -- the same way `creator.cc` reaches
+ * #GHOST_HACK_getFirstFile on macOS. */
+extern "C" bool GHOST_android_open_url(const char *url)
+{
+  return android_call_activity_bool_string(g_android_app, "openUrl", url);
 }
 
 GHOST_TSuccess GHOST_SystemAndroid::popupOnScreenKeyboard(GHOST_IWindow * /*window*/)

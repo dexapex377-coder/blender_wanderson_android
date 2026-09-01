@@ -6,6 +6,8 @@
  * \ingroup spuserpref
  */
 
+#include "AS_remote_library.hh"
+
 #include "BKE_global.hh"
 
 #include "BLI_listbase.hh"
@@ -187,7 +189,8 @@ static void draw_library_list(const bContext &C, ui::Layout &layout)
 static void draw_active_library_settings(ui::Layout &layout,
                                          const AnyAssetLibraryDefinition &library)
 {
-  if (library.type == ASSET_LIBRARY_ESSENTIALS) {
+  /* Touch: no checkbox where remote libraries cannot work; see AS_remote_library.hh. */
+  if (library.type == ASSET_LIBRARY_ESSENTIALS && asset_system::remote_libraries_supported()) {
     PointerRNA prefs_ptr = RNA_pointer_create_discrete(nullptr, RNA_PreferencesAssetLibraries, &U);
 
     ui::Layout &row = layout.row(false);

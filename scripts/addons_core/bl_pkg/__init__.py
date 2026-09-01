@@ -452,7 +452,16 @@ def remote_asset_library_sync(
         print("  skipping {!r}, online access is not allowed,".format(asset_library_url))
         return
 
-    from _bpy_internal.assets.remote_library import listing_downloader
+    try:
+        from _bpy_internal.assets.remote_library import listing_downloader
+    except ModuleNotFoundError as ex:
+        # Touch: Android has no `_multiprocessing`, which the listing downloader imports at module
+        # level, and the whole feature is switched off there -- see remote_libraries_supported() in
+        # AS_remote_library.hh for why it cannot work at all. This runs before any library is
+        # listed, though, so without this guard it printed a traceback on every sync tick.
+        print("  skipping {!r}, no remote asset library downloader on this platform: {!s}".format(
+            asset_library_url, ex))
+        return
 
     # Check if the download should happen at all.
     if only_if_older_than_sec and listing_downloader.is_more_recent_than(
@@ -583,7 +592,11 @@ def _remote_asset_library_restore_backups() -> None:
         if not asset_lib.use_remote_url:
             continue
 
-        from _bpy_internal.assets.remote_library import listing_downloader
+        # Touch: guarded for the same reason as in remote_asset_library_sync().
+        try:
+            from _bpy_internal.assets.remote_library import listing_downloader
+        except ModuleNotFoundError:
+            return
         listing_downloader.restore_backup_if_exists_locked(asset_lib.remote_url, Path(asset_lib.path))
 
 

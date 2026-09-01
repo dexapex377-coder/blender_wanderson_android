@@ -548,6 +548,38 @@ Span<std::reference_wrapper<VKContext>> VKDevice::contexts_get() const
   return contexts_;
 };
 
+/**
+ * Touch: can anything in this process allocate out of this heap?
+ *
+ * A heap reachable only through protected memory types is for DRM-protected content. Blender never
+ * allocates from one, so counting it as memory Blender has is simply wrong. Measured on a
+ * Snapdragon 8 Gen 3 (Adreno 750), where the driver reports two device-local heaps:
+ *
+ *   heap[0] 11084 MiB, flags 0x1
+ *   heap[1]  4095 MiB, flags 0x1, reachable only by memoryType[7], propertyFlags 0x21
+ *                                 (DEVICE_LOCAL | PROTECTED)
+ *
+ * Summed, that is the 14.8 GiB the status bar used to report on a phone sold with 12 GB of RAM --
+ * a figure larger than the machine has, describing no pool that exists. A discrete card has one
+ * device-local heap and no protected one, which is why the sum looked right everywhere else.
+ */
+bool VKDevice::memory_heap_is_allocatable(const uint32_t memory_heap_index) const
+{
+  for (const uint32_t type_index :
+       IndexRange(vk_physical_device_memory_properties_.memoryTypeCount))
+  {
+    const VkMemoryType &memory_type =
+        vk_physical_device_memory_properties_.memoryTypes[type_index];
+    if (memory_type.heapIndex != memory_heap_index) {
+      continue;
+    }
+    if (!bool(memory_type.propertyFlags & VK_MEMORY_PROPERTY_PROTECTED_BIT)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void VKDevice::memory_statistics_get(int *r_total_mem_kb, int *r_free_mem_kb) const
 {
   VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
@@ -565,12 +597,25 @@ void VKDevice::memory_statistics_get(int *r_total_mem_kb, int *r_free_mem_kb) co
       continue;
     }
 
-    total_mem += memory_heap.size;
+    /* Touch: and heaps this process cannot allocate from at all. */
+    if (!memory_heap_is_allocatable(memory_heap_index)) {
+      continue;
+    }
+
+    /* Touch: the budget, not the size of the heap.
+     *
+     * VmaBudget::budget is what is actually available to this process -- from
+     * VK_EXT_memory_budget where the driver offers it, and a heuristic otherwise. On a phone the
+     * device-local heap *is* system memory, all of it, shared with Android and every other app,
+     * so its size is not an amount Blender can ever have. The figure asked for here is the memory
+     * available for use, so that is the one reported. */
+    total_mem += budget.budget;
     used_mem += budget.usage;
   }
 
   *r_total_mem_kb = int(total_mem / 1024);
-  *r_free_mem_kb = int((total_mem - used_mem) / 1024);
+  /* Touch: a budget can be reported below what is already in use; do not wrap around. */
+  *r_free_mem_kb = int((total_mem > used_mem ? total_mem - used_mem : 0) / 1024);
 }
 
 /** \} */

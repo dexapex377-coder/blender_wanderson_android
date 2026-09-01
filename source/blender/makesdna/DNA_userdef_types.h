@@ -584,10 +584,35 @@ enum eUserpref_TempSpaceDisplayType : char {
  * back 1.0. See rna_userdef.cc. */
 #define USER_PRESSURE_THRESHOLD_MAX_ANDROID 0.5f
 
+/* Menu scale. Raising the Resolution Scale until a header button is comfortable
+ * under a thumb also enlarges the 3D viewport, the node canvas, the outliner and
+ * every line width in the program, on a screen that has no room to give away.
+ * What a phone actually needs is the opposite: bigger targets without losing
+ * canvas.
+ *
+ * So the menu chrome -- headers, the top bar, the status bar, the Properties tab
+ * column, tool bars and every pull-down -- takes an extra fraction on top of the
+ * Resolution Scale rather than a scale beside it.
+ *
+ * The value is that fraction, not the multiplier: 0.5 draws the menus half again
+ * as large, 0 leaves them at the raw Resolution Scale. Stored this way because it
+ * is what the slider means -- "how much extra", from nothing to double -- and a
+ * 0..1 factor cannot be set to a number that shrinks the menus below the rest of
+ * the interface, which no one wants and 1.0 in a multiplier field invites.
+ *
+ * Applied on top of the Resolution Scale rather than replacing it, so there is
+ * still one scale control: the preference moves the whole interface and this only
+ * decides where the menus start from. See ANDROID_TOUCH_UI_SCALE_STUDY.md.
+ *
+ * Named outside the platform test below for the same reason as the pressure
+ * threshold above: makesrna is a host tool and has to be able to see the value. */
+#define USER_UI_SCALE_MENU_ANDROID 0.5f
+
 #ifdef __ANDROID__
 #  define USER_RENDER_DISPLAY_DEFAULT USER_RENDER_DISPLAY_SCREEN
 #  define USER_TEMP_SPACE_DISPLAY_DEFAULT USER_TEMP_SPACE_DISPLAY_FULLSCREEN
 #  define USER_UI_SCALE_DEFAULT 1.1f
+#  define USER_UI_SCALE_MENU_DEFAULT USER_UI_SCALE_MENU_ANDROID
 #  define USER_BORDER_WIDTH_DEFAULT 4
 #  define USER_PRESSURE_THRESHOLD_MAX_DEFAULT USER_PRESSURE_THRESHOLD_MAX_ANDROID
 #  define USER_PRESSURE_SOFTNESS_DEFAULT 0.0f
@@ -595,6 +620,7 @@ enum eUserpref_TempSpaceDisplayType : char {
 #  define USER_RENDER_DISPLAY_DEFAULT USER_RENDER_DISPLAY_WINDOW
 #  define USER_TEMP_SPACE_DISPLAY_DEFAULT USER_TEMP_SPACE_DISPLAY_WINDOW
 #  define USER_UI_SCALE_DEFAULT 1.0f
+#  define USER_UI_SCALE_MENU_DEFAULT 0.0f
 #  define USER_BORDER_WIDTH_DEFAULT 2
 #  define USER_PRESSURE_THRESHOLD_MAX_DEFAULT 1.0f
 #  define USER_PRESSURE_SOFTNESS_DEFAULT 0.0f
@@ -1052,6 +1078,16 @@ struct UserDef {
   /** Setting for UI scale (fractional), before screen DPI has been applied.
    * Shown in the preferences as "Resolution Scale". */
   float ui_scale = USER_UI_SCALE_DEFAULT;
+  /** Extra size given to menu chrome only -- headers, the top bar, the status bar, navigation
+   * bars, tool bars and pull-downs -- as a fraction on top of `ui_scale`. 0.5 draws them half
+   * again as large, 0 leaves them at the raw `ui_scale`. Editor content is never affected.
+   * Shown in the preferences as "Menu Scale". Use ED_ui_menu_scale(), which returns the
+   * multiplier this describes, rather than reading it directly. */
+  float ui_scale_menu = USER_UI_SCALE_MENU_DEFAULT;
+  /* Paired with the field above rather than left to fall where it may: on its own a single float
+   * shifts every pointer and ListBase in the rest of this struct off the 8 byte boundary DNA
+   * requires, and makesdna refuses the build. Four bytes here keeps the pair even. */
+  char _pad9[4] = {};
   /**
    * Setting for UI line width.
    *

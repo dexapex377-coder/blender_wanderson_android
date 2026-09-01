@@ -123,7 +123,12 @@ bool ED_screen_edge_snap_for_touch(wmWindow *win, int xy[2])
    *
    * So a press that lands near a border is moved onto it. Nothing downstream knows the difference:
    * the border belongs to no region, so the press reaches the screen keymap and starts the move
-   * exactly as a precise one would. */
+   * exactly as a precise one would.
+   *
+   * The radius is not what decides the reach of a border, though it looks as if it should.
+   * Measured on the device, an area border can be grabbed from about 13 pixels away and no
+   * further, which is BORDERPADDING and not this: raising this to 16 units changed nothing at 22
+   * pixels out. Widen BORDERPADDING for that, in screen_intern.hh. */
   const int radius = int(12.0f * UI_SCALE_FAC);
 
   /* Only from the open side of an editor. Inside a header, a tool bar or a nav bar the press
@@ -131,6 +136,24 @@ bool ED_screen_edge_snap_for_touch(wmWindow *win, int xy[2])
   if (ScrArea *area = BKE_screen_find_area_xy(screen, SPACE_TYPE_ANY, xy)) {
     const ARegion *region = BKE_area_find_region_xy(area, RGN_TYPE_ANY, xy);
     if (region != nullptr && region->regiontype != RGN_TYPE_WINDOW) {
+      return false;
+    }
+  }
+
+  /* And never off an action zone, which is a control in its own right.
+   *
+   * The tab that reopens a collapsed side panel sits on the region border, inside a
+   * #RGN_TYPE_WINDOW region, so the test above lets it through -- and then the press is moved onto
+   * the area edge, where screen_actionzone_find_xy() no longer finds the tab and the panel stays
+   * shut. That is the whole reason a collapsed panel could be reopened with a stylus or a mouse,
+   * which never reach this function, and never with a finger. Measured: the status bar showed
+   * "Show Hidden Region" under the finger, so the hover found the tab, and the press did nothing.
+   *
+   * Every area is searched rather than the one under the point, because the point is on a border
+   * and which area owns it is exactly the ambiguity being worked around. screen_cursor_set() scans
+   * the same way for the same reason. */
+  for (ScrArea &area_iter : screen->areabase) {
+    if (ED_area_actionzone_find_xy(&area_iter, xy) != nullptr) {
       return false;
     }
   }

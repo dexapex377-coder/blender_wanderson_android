@@ -4201,6 +4201,26 @@ static int do_but_textedit(
         }
       }
 
+      /* Touch: a press inside the results arms a drag, and the release ends it -- wherever that
+       * release lands, so a finger that leaves the box on its way up cannot leave the drag armed
+       * behind it.
+       *
+       * Arming on the press is the whole point. The alternative, asking the event which button was
+       * pressed last, answers with the last press there ever was: after any click at all it keeps
+       * saying LEFTMOUSE, so a mouse merely moved across the list, or a stylus merely held above
+       * it, scrolled as though it were being dragged. */
+      bool ended_drag = false;
+      if (data->searchbox) {
+        if (ELEM(event->val, KM_PRESS, KM_DBL_CLICK)) {
+          if (inbox) {
+            searchbox_drag_press(data->searchbox);
+          }
+        }
+        else if (event->val == KM_RELEASE) {
+          ended_drag = searchbox_drag_consume_release(data->searchbox);
+        }
+      }
+
       /* for double click: we do a press again for when you first click on button
        * (selects all text, no cursor pos) */
       if (ELEM(event->val, KM_PRESS, KM_DBL_CLICK)) {
@@ -4261,7 +4281,23 @@ static int do_but_textedit(
         /* if we allow activation on key press,
          * it gives problems launching operators #35713. */
         if (event->val == KM_RELEASE) {
-          button_activate_state(C, but, BUTTON_STATE_EXIT);
+          /* Touch: a release that ends a drag is letting go of the list, not choosing from it.
+           * Without this the finger scrolls to what it wanted and then applies whatever it
+           * happened to stop over, which closes the popup on the wrong answer. */
+          if (!ended_drag) {
+            /* Touch: apply what was pressed rather than what the highlight happened to be on.
+             * A pointer drags the highlight along with it and arrives already on the right row;
+             * a finger and a stylus do not, so without this a tap applies whatever the last arrow
+             * key left selected.
+             *
+             * A release that landed on no result at all -- the slack below the last row, which a
+             * box sized to whole rows can have -- takes nothing rather than the stale highlight.
+             * Choosing something the finger never touched is worse than choosing nothing. */
+            if (data->searchbox && !searchbox_select_at(data->searchbox, event->xy)) {
+              data->cancel = data->escapecancel = true;
+            }
+            button_activate_state(C, but, BUTTON_STATE_EXIT);
+          }
           retval = WM_UI_HANDLER_BREAK;
         }
       }
@@ -9162,6 +9198,34 @@ static int do_button(bContext *C, Block *block, Button *but, const wmEvent *even
     /* handle menu */
 
     if ((event->type == RIGHTMOUSE) && (event->modifier == 0) && (event->val == KM_PRESS)) {
+#ifdef __ANDROID__
+      /* Touch: a finger held on a button that has a hold action gets the hold, not the context
+       * menu.
+       *
+       * A tool with variants -- Select Box holding Circle and Lasso, and every other tool with the
+       * small corner mark -- opens them by pressing and holding, through but->hold_func. A finger
+       * cannot get there: GHOST withholds its press until it has moved past the slop, and a press
+       * held still is turned into a right-click at TOUCH_LONG_PRESS_MS before any left press is
+       * sent (see GHOST_SystemAndroid::touchLongPressCheck). So holding a tool opened "Add to
+       * Quick Favorites" instead of the variants, and the variants had no route at all from a
+       * finger. The comment on the hold timer in button_activate_state() says as much.
+       *
+       * Only for a pointer with no tablet data, which is the finger and, on a phone, a mouse. A
+       * stylus is left alone: its tip already sends a left press, so holding it reaches the hold
+       * timer the ordinary way, and its side button is a real right-click that should stay one.
+       *
+       * The cost, stated plainly: on a button that has a hold action, a finger can no longer reach
+       * the context menu -- the same press cannot mean two things. A stylus still can, with its
+       * side button, and every button without a hold action is untouched. Worth it because the
+       * variants are otherwise unreachable, while the context menu is not. */
+      if (but->hold_func != nullptr && event->tablet.active == EVT_TABLET_NONE) {
+        data->cancel = true;
+        button_activate_state(C, but, BUTTON_STATE_EXIT);
+        but->hold_func(C, data->region, but);
+        return WM_UI_HANDLER_BREAK;
+      }
+#endif
+
       /* For some button types that are typically representing entire sets of data,
        * right-clicking to spawn the context menu should also activate the item. This makes it
        * clear which item will be operated on. Apply the button immediately, so context menu
@@ -9502,6 +9566,11 @@ static void button_tooltip_timer_reset(bContext *C, Button *but)
 /* -------------------------------------------------------------------- */
 /** \name Button State Handling
  * \{ */
+
+bool ui_but_menu_is_open(const Button *but)
+{
+  return but->active && but->active->state == BUTTON_STATE_MENU_OPEN;
+}
 
 static bool button_modal_state(HandleButtonState state)
 {
@@ -11703,6 +11772,130 @@ static int handle_menu_mmb_event(bContext *C,
   return retval;
 }
 
+#ifdef __ANDROID__
+/**
+ * Touch: scroll a popup that does not fit, with a finger.
+ *
+ * A mouse has two ways into an over-long menu and a finger has neither. It can rest in the arrow
+ * band at the top or bottom, which starts #PopupBlockHandle::scrolltimer and auto-scrolls; a
+ * finger cannot hover at all, only touch. Or it can hold the middle button and pan, which a
+ * finger has no equivalent of. So the menu was reachable only as far as it happened to fit, and
+ * the arrows looked like controls while being nothing of the kind.
+ *
+ * This adds the two gestures a phone expects, and nothing else:
+ *
+ * - Drag anywhere in the popup to pan it, the way the rest of this port already pans headers and
+ *   panels. The press is not consumed, so a tap still presses the item under it; only once the
+ *   drag threshold is crossed does it become a scroll, and then the release is swallowed so the
+ *   item the finger drifted onto is not fired.
+ * - Tap the arrow band to step. Nothing else is under it: #but_find_mouse_over_ex refuses to
+ *   return a button there while the block is clipped, which is what made the arrows feel dead.
+ *
+ * Both are inert unless the block is actually clipped, so a popup that fits behaves exactly as
+ * it did. This covers dialogs as much as menus: every popup in the program is laid out and
+ * handled through this path, and the scroll offset lives on the handle rather than on anything
+ * menu-specific.
+ */
+static int handle_menu_touch_scroll_event(bContext *C,
+                                          const wmEvent *event,
+                                          PopupBlockHandle *menu,
+                                          const bool inside)
+{
+  ARegion *region = menu->region;
+  Block *block = static_cast<Block *>(region->runtime->uiblocks.first);
+  if (block == nullptr) {
+    return WM_UI_HANDLER_CONTINUE;
+  }
+
+  /* Only a popup that overflows has anywhere to scroll to. */
+  const bool scrollable = (block->flag & (BLOCK_CLIPTOP | BLOCK_CLIPBOTTOM)) != 0;
+
+  if (event->type == LEFTMOUSE && event->val == KM_PRESS) {
+    menu->touch_scroll_armed = false;
+    menu->touch_scroll_panning = false;
+    menu->touch_scroll_arrow = 0;
+
+    if (!inside || !scrollable || menu->mmb_panning || menu->is_grab) {
+      return WM_UI_HANDLER_CONTINUE;
+    }
+    /* A button already editing text or dragging a value owns the gesture. */
+    if (Button *but = region_find_active_but(region)) {
+      if (button_modal_state(but->active->state)) {
+        return WM_UI_HANDLER_CONTINUE;
+      }
+    }
+
+    int mx = event->xy[0];
+    int my = event->xy[1];
+    window_to_block(region, block, &mx, &my);
+
+    menu->touch_scroll_armed = true;
+    menu->touch_scroll_start_y = event->xy[1];
+    menu->touch_scroll_last_y = event->xy[1];
+    menu->touch_scroll_arrow = menu_scroll_test(block, {mx, my});
+
+    /* Deliberately not consumed: a tap has to reach the item the way it always did. */
+    return WM_UI_HANDLER_CONTINUE;
+  }
+
+  if (!menu->touch_scroll_armed) {
+    return WM_UI_HANDLER_CONTINUE;
+  }
+
+  if (event->type == MOUSEMOVE) {
+    if (!menu->touch_scroll_panning) {
+      if (abs(event->xy[1] - menu->touch_scroll_start_y) < WM_event_drag_threshold(event)) {
+        return WM_UI_HANDLER_CONTINUE;
+      }
+      /* Past the threshold this is a scroll and not a press. Let go of whatever the finger
+       * landed on, so it neither fires nor stays highlighted under a moving finger. */
+      menu->touch_scroll_panning = true;
+      if (Button *but = region_find_active_but(region)) {
+        but->active->cancel = true;
+        button_activate_exit(C, but, but->active, false, false);
+      }
+    }
+
+    const int delta = event->xy[1] - menu->touch_scroll_last_y;
+    if (delta != 0) {
+      /* The content follows the finger, which is the gesture every other list on the device
+       * uses. Same sign as the middle mouse pan above. */
+      menu_scroll_apply_offset_y(region, block, delta);
+      menu->touch_scroll_last_y = event->xy[1];
+    }
+    return WM_UI_HANDLER_BREAK;
+  }
+
+  if (event->type == LEFTMOUSE && event->val == KM_RELEASE) {
+    const bool panned = menu->touch_scroll_panning;
+    const char arrow = menu->touch_scroll_arrow;
+
+    menu->touch_scroll_armed = false;
+    menu->touch_scroll_panning = false;
+    menu->touch_scroll_arrow = 0;
+
+    if (panned) {
+      /* The item under the finger now is not the one the gesture started on. */
+      return WM_UI_HANDLER_BREAK;
+    }
+    if (arrow != 0 && scrollable) {
+      /* A tap on the band steps by more than the auto-scroll does per tick: one row per tap
+       * would take a dozen taps to cross a menu the length of File. */
+      const float dy = (UI_UNIT_Y * 3.0f) / block->aspect;
+      if (arrow == 't' && (block->flag & BLOCK_CLIPTOP)) {
+        menu_scroll_apply_offset_y(region, block, -dy);
+      }
+      else if (arrow == 'b' && (block->flag & BLOCK_CLIPBOTTOM)) {
+        menu_scroll_apply_offset_y(region, block, dy);
+      }
+      return WM_UI_HANDLER_BREAK;
+    }
+  }
+
+  return WM_UI_HANDLER_CONTINUE;
+}
+#endif /* __ANDROID__ */
+
 static int handle_menu_event(bContext *C,
                              const wmEvent *event,
                              PopupBlockHandle *menu,
@@ -11777,6 +11970,11 @@ static int handle_menu_event(bContext *C,
 
       return retval;
     }
+  }
+#endif
+#ifdef __ANDROID__
+  if (retval == WM_UI_HANDLER_CONTINUE) {
+    retval = handle_menu_touch_scroll_event(C, event, menu, inside);
   }
 #endif
   if (retval == WM_UI_HANDLER_CONTINUE) {

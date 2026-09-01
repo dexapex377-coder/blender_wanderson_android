@@ -5984,19 +5984,34 @@ static void draw_clip_tri(Block *block, const rcti *rect, WidgetType *wt)
     draw_color[2] = float(color[2]) / 255.0f;
     draw_color[3] = 1.0f;
 
+#ifdef __ANDROID__
+    /* Touch: the arrows sit in a band twice as tall (see UI_MENU_SCROLL_ARROW), and a marker
+     * drawn at the old size in the middle of it reads as a speck rather than a control. Grown
+     * to match, and moved to the centre of the band it now occupies.
+     *
+     * draw_icon_tri() takes its size from the widget unit divided by the aspect, so dividing
+     * the aspect is how the glyph is scaled -- there is no size argument to pass. */
+    const float tri_scale = 2.0f;
+    const float tri_inset = 12.0f;
+#else
+    const float tri_scale = 1.0f;
+    const float tri_inset = 6.0f;
+#endif
+    const float tri_aspect = block->aspect / tri_scale;
+
     if (block->flag & BLOCK_CLIPTOP) {
       draw_icon_tri(BLI_rcti_cent_x(rect),
-                    rect->ymax - (6 * UI_SCALE_FAC) / block->aspect,
+                    rect->ymax - (tri_inset * UI_SCALE_FAC) / block->aspect,
                     't',
                     draw_color,
-                    block->aspect);
+                    tri_aspect);
     }
     if (block->flag & BLOCK_CLIPBOTTOM) {
       draw_icon_tri(BLI_rcti_cent_x(rect),
-                    rect->ymin + (10 * UI_SCALE_FAC) / block->aspect,
+                    rect->ymin + ((tri_inset + 4.0f) * UI_SCALE_FAC) / block->aspect,
                     'v',
                     draw_color,
-                    block->aspect);
+                    tri_aspect);
     }
   }
 }

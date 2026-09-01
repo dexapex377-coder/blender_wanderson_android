@@ -38,6 +38,28 @@ struct RemoteLibraryDefinitionRef {
 };
 
 constexpr StringRefNull REMOTE_LIBRARY_TOP_META_FILE_NAME = "_asset-library-meta.json";
+
+/**
+ * Touch: whether this platform can download a remote asset library at all.
+ *
+ * False on Android, where nothing about the feature can work and every part of it fails silently.
+ * The listing downloader is built on `multiprocessing` with the 'spawn' start method, and three
+ * separate things stop that:
+ *
+ * - `_multiprocessing` is not in the Python that ships here. CPython refuses to build it when
+ *   `sem_open` is missing, and Bionic has no POSIX named semaphores. The build says as much:
+ *   `ac_cv_func_sem_open=no`, `MODULE__MULTIPROCESSING_STATE=missing`.
+ * - Were it built, `multiprocessing.synchronize` would fail at run time for the same reason.
+ * - And 'spawn' re-runs `sys.executable`. Blender is a shared library inside a NativeActivity
+ *   here, there is no executable to re-run, and since API 29 Android refuses to execute anything
+ *   out of an app's own storage anyway.
+ *
+ * Without this the failure surfaced three steps from its cause: the sync threw a
+ * ModuleNotFoundError that #remote_library_request_download() discards -- it still carries a
+ * "TODO: report errors in the UI somehow" -- and the user was shown "file does not exist:
+ * ..._asset-library-meta.json" for a file that was never going to be downloaded.
+ */
+bool remote_libraries_supported();
 constexpr StringRefNull REMOTE_LIBRARY_TOP_META_FILE_NAME_LEADING_SLASH =
     "/_asset-library-meta.json";
 

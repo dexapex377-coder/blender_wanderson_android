@@ -478,6 +478,12 @@ void ED_region_do_layout(bContext *C, ARegion *region)
 
   region->runtime->do_draw |= RGN_DRAWING;
 
+  /* Touch: menu chrome lays itself out larger than editor content. This reaches the dynamically
+   * sized regions -- the top bar, the status bar, the redo panel, the file browser button bar --
+   * whose size comes out of this callback. Most editor headers do their layout inside their draw
+   * callback instead, and are covered by the guard in ED_region_do_draw(). */
+  const ScopedMenuScale menu_scale(region, area);
+
   ui::theme::theme_set(area ? area->spacetype : 0, at->regionid);
   at->layout(C, region);
 
@@ -503,43 +509,54 @@ void ED_region_do_draw(bContext *C, ARegion *region)
 
   wmOrtho2_region_pixelspace(region);
 
-  ui::theme::theme_set(area ? area->spacetype : 0, at->regionid);
+  /* Touch: menu chrome draws larger than editor content. Most editor headers build their layout
+   * inside this draw callback -- ED_region_header() runs layout and draw together -- so guarding
+   * the draw covers both for them.
+   *
+   * Scoped rather than held to the end of the function on purpose: the action zones below are
+   * drawn at positions computed in region_azones_add(), outside any guard, so drawing them
+   * scaled would put a bigger glyph on a hit area that did not move. */
+  {
+    const ScopedMenuScale menu_scale(region, area);
 
-  if (area && area_is_pseudo_minimized(area)) {
-    ui::theme::frame_buffer_clear(TH_EDITOR_BORDER);
-    return;
-  }
-  /* optional header info instead? */
-  if (region->runtime->headerstr) {
-    region_draw_status_text(area, region);
-  }
-  else if (at->draw) {
-    at->draw(C, region);
-  }
+    ui::theme::theme_set(area ? area->spacetype : 0, at->regionid);
+
+    if (area && area_is_pseudo_minimized(area)) {
+      ui::theme::frame_buffer_clear(TH_EDITOR_BORDER);
+      return;
+    }
+    /* optional header info instead? */
+    if (region->runtime->headerstr) {
+      region_draw_status_text(area, region);
+    }
+    else if (at->draw) {
+      at->draw(C, region);
+    }
 
 #ifdef WITH_INPUT_IME
-  /* Manage the IME candidate window for the active region based on `cursor_ime`:
-   * - Position returned: start (if no session) or reposition IME.
-   * - nullopt returned: end any active IME session (e.g. exited edit mode).
-   * Deferred during animation playback, keeping `do_ime` set for when it stops. */
-  if (at->cursor_ime && region->runtime->do_ime) {
-    const bScreen *screen = WM_window_get_active_screen(win);
-    if (!screen->animtimer && !screen->scrubbing && region == screen->active_region) {
-      WM_window_IME_region_refresh(win, area, region);
-      region->runtime->do_ime = false;
+    /* Manage the IME candidate window for the active region based on `cursor_ime`:
+     * - Position returned: start (if no session) or reposition IME.
+     * - nullopt returned: end any active IME session (e.g. exited edit mode).
+     * Deferred during animation playback, keeping `do_ime` set for when it stops. */
+    if (at->cursor_ime && region->runtime->do_ime) {
+      const bScreen *screen = WM_window_get_active_screen(win);
+      if (!screen->animtimer && !screen->scrubbing && region == screen->active_region) {
+        WM_window_IME_region_refresh(win, area, region);
+        region->runtime->do_ime = false;
+      }
     }
-  }
 #endif
 
-  /* XXX test: add convention to end regions always in pixel space,
-   * for drawing of borders/gestures etc */
-  ED_region_pixelspace(region);
+    /* XXX test: add convention to end regions always in pixel space,
+     * for drawing of borders/gestures etc */
+    ED_region_pixelspace(region);
 
-  /* Remove sRGB override by rebinding the framebuffer. */
-  gpu::FrameBuffer *fb = GPU_framebuffer_active_get();
-  GPU_framebuffer_bind(fb);
+    /* Remove sRGB override by rebinding the framebuffer. */
+    gpu::FrameBuffer *fb = GPU_framebuffer_active_get();
+    GPU_framebuffer_bind(fb);
 
-  ED_region_draw_cb_draw(C, region, REGION_DRAW_POST_PIXEL);
+    ED_region_draw_cb_draw(C, region, REGION_DRAW_POST_PIXEL);
+  }
 
   region_draw_azones(area, region);
 
@@ -1263,8 +1280,21 @@ static void region_azone_edge(const ScrArea *area, AZone *az, const ARegion *reg
 static void region_azone_tab_plus(ScrArea *area, AZone *az, ARegion *region)
 {
   float edge_offset = 1.0f;
-  const float tab_size_x = 1.0f * U.widget_unit;
-  const float tab_size_y = 0.5f * U.widget_unit;
+
+  /* Touch: the tab that reopens a collapsed side panel is drawn at the menu scale.
+   *
+   * It is the smallest thing in the interface that has to be hit exactly, and the one with no
+   * second way in: a collapsed region has no other control, so missing this tab means the panel
+   * stays shut. Upstream it is one widget unit long by half a unit deep -- about 37x18 px on this
+   * phone -- which a stylus can hit and a fingertip, some 8 mm across, essentially cannot.
+   *
+   * az->rect is both what is drawn and what is hit-tested (see area_actionzone_get_rect()), so the
+   * one multiplier moves the target and the arrow together. The menu scale rather than a constant
+   * of its own, because this is chrome like every other thumb target and it should follow the same
+   * preference; it returns 1.0 off Android, so nothing changes there. */
+  const float touch_scale = ED_ui_menu_scale();
+  const float tab_size_x = 1.0f * U.widget_unit * touch_scale;
+  const float tab_size_y = 0.5f * U.widget_unit * touch_scale;
 
   switch (az->edge) {
     case AE_TOP_TO_BOTTOMRIGHT: {
@@ -1663,6 +1693,21 @@ static void region_rect_recursive(
     }
   }
 
+  /* Touch: the vertical bars -- the Properties tab column, the tool bars, the tool settings
+   * beside them -- take their width from `ARegion.sizex` in the saved layout, scaled by
+   * UI_SCALE_FAC. The icons inside them are already drawn at the menu scale by the guard in
+   * ED_region_do_draw(), so without this the column would stay its old width and clip them.
+   *
+   * The header family below is unaffected: ED_area_headersize() and friends scale themselves,
+   * and the guard declines to nest, so their heights are computed once and not twice.
+   *
+   * Released by hand before this function recurses into `region->next`, further down. It has to
+   * be: the next region is a sibling, not a child, and it must choose its own scale. It also has
+   * to still be held at the `region->sizex = winx / UI_SCALE_FAC` write-back below, which undoes
+   * the multiply done here -- divide by a different number than you multiplied by and the stored
+   * size drifts a little further every time the screen is refreshed. */
+  ScopedMenuScale menu_scale(region, area);
+
   /* `prefsizex/y`, taking into account DPI. */
   int prefsizex = UI_SCALE_FAC *
                   ((region->sizex > 1) ? region->sizex + 0.5f : region->runtime->type->prefsizex);
@@ -1998,6 +2043,11 @@ static void region_rect_recursive(
   }
 
   BLI_assert(BLI_rcti_is_valid(&region->winrct));
+
+  /* Touch: everything this region needed the menu scale for is done. The next region is a
+   * sibling and decides for itself, so hand the scale back before recursing rather than letting
+   * a header pass its size on to the editor content beside it. */
+  menu_scale.reset();
 
   region_rect_recursive(area, region->next, remainder, overlap_remainder, quad);
 
@@ -4071,6 +4121,17 @@ void ED_region_header_init(ARegion *region)
 
 int ED_area_headersize()
 {
+  /* Touch: computed under the menu scale rather than multiplied afterwards, so the height this
+   * hands out is exactly the height the header region will lay itself out to. Multiplying the
+   * finished number would scale the two line-width borders inside `U.widget_unit` as well, and
+   * leave the bar a couple of pixels out of step with its own contents.
+   *
+   * Every caller of this -- the region rect pass, the minimum area heights when a border is
+   * dragged, the join and snap thresholds, the top bar and status bar sizes -- is asking how tall
+   * a header is, and all of them want the answer that is actually on screen. In particular the
+   * minimums must grow with it, or an area could be dragged smaller than its own header. */
+  const ScopedMenuScale menu_scale(ED_ui_menu_scale());
+
   /* Accommodate widget and padding. */
   return U.widget_unit + int(UI_SCALE_FAC * HEADER_PADDING_Y);
 }
