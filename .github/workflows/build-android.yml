@@ -18,7 +18,8 @@ on:
 #   - `${LIBDIR}/vulkan/include` needs Vulkan-Headers 1.4.341 (deps/build.sh::build_vulkan_headers())
 #     because the NDK ships older headers and Blender 5.3 uses newer Vulkan structs.
 #   - NDK r28.2.13676358 + JDK 17 + build-tools 35.0.1 + platforms android-35, as env.sh/package.sh
-#     expect. GIF LFS objects come from projects.blender.org (GitHub mirror serves 130-byte pointers).
+#     expect. LFS objects are served anonymously by the GitHub LFS store of this fork (the parent
+#     repo keeps its own store; the objects are NOT on projects.blender.org — see the checkout step).
 #
 # env.sh is intentionally NOT exported here: build_apk.sh unsets ANDROID_HOME/NDK_ROOT and derives
 # them from $HOME/android-sdk, so we stage the whole SDK there and only pre-set the knobs env.sh
@@ -36,17 +37,19 @@ jobs:
           ref: main
           lfs: false
 
-      - name: Resolve required Git LFS files from the official Blender repo
+      - name: Resolve required Git LFS files from the GitHub store
         run: |
           set -o pipefail
+          # WARNING: do NOT fetch these from projects.blender.org — the LFS objects of
+          # Wanderson's fork (360 files; some datafiles/assets are customized) do NOT exist
+          # upstream (404). The GitHub mirror serves them anon since the parent repo keeps
+          # its LFS store, and this fork inherits it. Keep the origin remote as-is.
           cd blender
           git lfs install --local
-          git remote add upstream-lfs https://projects.blender.org/blender/blender.git
           # Only the paths used at package/runtime time. package.sh copies release/datafiles,
           # scripts, assets, locale/*.po; the rest of the tree is plain source.
-          INCLUDE="release/datafiles/**,scripts/**,assets/**,locale/**"
-          git lfs fetch upstream-lfs --include "$INCLUDE"
-          git lfs pull --include "$INCLUDE"
+          INCLUDE="release/datafiles/** scripts/** assets/** locale/**"
+          git lfs pull --include="$INCLUDE"
           echo "LFS files resolved."
 
       - name: Verify resolved LFS files
