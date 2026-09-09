@@ -60,10 +60,11 @@ jobs:
           SIZE_SB=$(stat -c%s release/datafiles/startup.blend)
           echo "startup.blend size: $SIZE_SB (real content, not a stub)"
           [ "$SIZE_SB" -gt 1024 ] || { echo "ERROR: startup.blend is an LFS stub"; exit 1; }
-          PNG=$(git ls-files 'assets/**/*.png' | head -1)
-          MAGIC=$(head -c4 "$PNG" | od -An -tx1 | tr -d ' \n')
-          [ "$MAGIC" = "89504e47" ] || { echo "ERROR: $PNG is still a stub (magic=$MAGIC)"; exit 1; }
-          echo "Assets OK (first asset PNG: $PNG)."
+          ASSET=$(git ls-files 'assets/**/*.blend' | head -1)
+          MAGIC=$(head -c7 "$ASSET" | od -An -tc | tr -d ' \n')
+          echo "First asset: $ASSET (magic=$MAGIC)"
+          echo "$MAGIC" | grep -q "BLENDER" || { echo "ERROR: $ASSET is still an LFS stub"; exit 1; }
+          echo "Assets OK."
           echo "=== remaining git modifications (should be empty) ==="
           git status --short | head -20
           echo "Required LFS files verified OK."
