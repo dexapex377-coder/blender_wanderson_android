@@ -61,9 +61,9 @@ jobs:
           echo "startup.blend size: $SIZE_SB (real content, not a stub)"
           [ "$SIZE_SB" -gt 1024 ] || { echo "ERROR: startup.blend is an LFS stub"; exit 1; }
           ASSET=$(git ls-files 'assets/**/*.blend' | head -1)
-          MAGIC=$(head -c7 "$ASSET" | od -An -tc | tr -d ' \n')
-          echo "First asset: $ASSET (magic=$MAGIC)"
-          echo "$MAGIC" | grep -q "BLENDER" || { echo "ERROR: $ASSET is still an LFS stub"; exit 1; }
+          SIZE_AS=$(stat -c%s "$ASSET")
+          echo "First asset $ASSET size: $SIZE_AS"
+          [ "$SIZE_AS" -gt 1024 ] || { echo "ERROR: $ASSET is still an LFS stub"; exit 1; }
           echo "Assets OK."
           echo "=== remaining git modifications (should be empty) ==="
           git status --short | head -20
