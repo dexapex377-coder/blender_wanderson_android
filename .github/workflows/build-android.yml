@@ -199,21 +199,25 @@ jobs:
 
       # Vulkan-Headers 1.4.341 into ${LIBDIR}/vulkan/include, exactly as deps/build.sh's
       # build_vulkan_headers() installs them (the prebuilt libs only ship spirv/).
+      # NOTE: Vulkan-Headers ships TWO include subdirs — `vulkan/` (vulkan_core.h…) and
+      # `vk_video/` (vulkan_video_codec_*.h, included from vulkan_core.h) — copy both.
       - name: Provide Vulkan-Headers 1.4.341
         run: |
           set -o pipefail
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
           VK="$LIBDIR/vulkan/include"
-          if [ ! -f "$VK/vulkan/vulkan_core.h" ]; then
+          if [ ! -f "$VK/vk_video/vulkan_video_codec_av1std.h" ]; then
             curl -sL --max-time 300 -o /tmp/vulkan-headers.tar.gz \
               https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.341.0.tar.gz
             tar -xf /tmp/vulkan-headers.tar.gz -C /tmp
             mkdir -p "$VK"
             cp -R /tmp/Vulkan-Headers-*/include/vulkan "$VK/"
+            cp -R /tmp/Vulkan-Headers-*/include/vk_video "$VK/"
             rm -rf /tmp/Vulkan-Headers-*
           fi
           grep "#define VK_HEADER_VERSION " "$VK/vulkan/vulkan_core.h"
-          grep -Hn "VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT" "$VK/vulkan/vulkan_core.h" | head -1
+          test -f "$VK/vk_video/vulkan_video_codec_av1std.h" \
+            || { echo "ERROR: vk_video headers missing"; exit 1; }
 
       # Empty stub archives for -lpthread/-lrt (bionic folds both into libc).
       # Mirrors deps/build.sh::stub_libs() byte-for-byte.
