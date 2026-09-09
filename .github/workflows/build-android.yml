@@ -19,7 +19,7 @@ on:
 #     because the NDK ships older headers and Blender 5.3 uses newer Vulkan structs.
 #   - NDK r28.2.13676358 + JDK 17 + build-tools 35.0.1 + platforms android-35, as env.sh/package.sh
 #     expect. LFS objects are served anonymously by the GitHub LFS store of this fork (the parent
-#     repo keeps its own store; the objects are NOT on projects.blender.org — see the checkout step).
+#     repo keeps its own store; the objects are NOT on projects.blender.org -- see the checkout step).
 #
 # env.sh is intentionally NOT exported here: build_apk.sh unsets ANDROID_HOME/NDK_ROOT and derives
 # them from $HOME/android-sdk, so we stage the whole SDK there and only pre-set the knobs env.sh
@@ -40,7 +40,7 @@ jobs:
       - name: Resolve required Git LFS files from the GitHub store
         run: |
           set -o pipefail
-          # WARNING: do NOT fetch these from projects.blender.org — the LFS objects of
+          # WARNING: do NOT fetch these from projects.blender.org -- the LFS objects of
           # Wanderson's fork (360 files; some datafiles/assets are customized) do NOT exist
           # upstream (404). The GitHub mirror serves them anon since the parent repo keeps
           # its LFS store, and this fork inherits it. Keep the origin remote as-is.
@@ -89,7 +89,7 @@ jobs:
           path: blender/lib/linux_x64
           key: libs-x64-${{ steps.libs-commit.outputs.x64 }}
 
-      - name: Clone precompiled libs (Android ARM64 — target build)
+      - name: Clone precompiled libs (Android ARM64 -- target build)
         if: steps.cache-libs-android.outputs.cache-hit != 'true'
         run: |
           set -o pipefail
@@ -99,7 +99,7 @@ jobs:
           git lfs install
           git lfs pull
 
-      - name: Clone precompiled libs (Linux x64 — host codegen tools)
+      - name: Clone precompiled libs (Linux x64 -- host codegen tools)
         if: steps.cache-libs-x64.outputs.cache-hit != 'true'
         run: |
           set -o pipefail
@@ -213,9 +213,9 @@ jobs:
 
       # Vulkan-Headers 1.4.341 into ${LIBDIR}/vulkan/include, exactly as deps/build.sh's
       # build_vulkan_headers() installs them (the prebuilt libs only ship spirv/).
-      # NOTE: Vulkan-Headers ships TWO include subdirs — `vulkan/` (vulkan_core.h…) and
-      # `vk_video/` (vulkan_video_codec_*.h, included from vulkan_core.h) — copy both.
-- name: Provide Vulkan-Headers 1.4.341
+      # NOTE: Vulkan-Headers ships TWO include subdirs -- `vulkan/` (vulkan_core.h...) and
+      # `vk_video/` (vulkan_video_codec_*.h, included from vulkan_core.h) -- copy both.
+      - name: Provide Vulkan-Headers 1.4.341
         run: |
           set -o pipefail
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
