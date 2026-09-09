@@ -135,18 +135,28 @@ jobs:
             || { echo "ERROR: python3.13 runtime missing"; exit 1; }
           echo "Both libs OK."
 
+      - name: Cache staged Android SDK
+        id: cache-sdk
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/android-sdk
+          key: android-sdk-28.2.13676358
+
       - name: Stage Android SDK ($HOME/android-sdk as env.sh expects)
         id: sdk
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           set -o pipefail
           # env.sh (Linux) defaults ANDROID_HOME=$HOME/android-sdk, and build_apk.sh unsets any
           # injected ANDROID_HOME. Stage the full SDK there, keyed by the NDK version env.sh wants.
           SDK="$HOME/android-sdk"
-          mkdir -p "$SDK"
-          # Reuse the runner's preinstalled sdkmanager to install into our staged root.
+          mkdir -p "$SDK/licenses"
+          # Reuse the runner's preinstalled sdkmanager to install into our staged root, and
+          # copy the pre-accepted licenses instead of piping `yes` (SIGPIPE breaks pipefail).
+          cp "$ANDROID_HOME/licenses/"* "$SDK/licenses/" 2>/dev/null || true
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           if [ -x "$SDKM" ]; then
-            yes | "$SDKM" --sdk_root="$SDK" \
+            "$SDKM" --sdk_root="$SDK" \
               "ndk;28.2.13676358" \
               "build-tools;35.0.1" \
               "platforms;android-35" \
@@ -158,6 +168,12 @@ jobs:
           echo "SDK staged at $SDK:"
           ls "$SDK"
           ls "$SDK/ndk"
+
+      - uses: actions/cache/save@v4
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        with:
+          path: ~/android-sdk
+          key: android-sdk-28.2.13676358
 
       - name: Install host build tools
         run: |
