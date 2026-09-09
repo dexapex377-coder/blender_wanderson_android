@@ -135,6 +135,20 @@ jobs:
             || { echo "ERROR: python3.13 runtime missing"; exit 1; }
           echo "Both libs OK."
 
+      - name: Patch lib layout (sse2neon include/)
+        run: |
+          set -o pipefail
+          LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
+          # The projects.blender.org prebuilt libs install sse2neon.h at the package ROOT,
+          # but platform_android.cmake hardcodes SSE2NEON_INCLUDE_DIR=${LIBDIR}/sse2neon/include
+          # (Wanderson's deps/build.sh::build_sse2neon()). Align the layout.
+          if [ -f "$LIBDIR/sse2neon/sse2neon.h" ] && [ ! -f "$LIBDIR/sse2neon/include/sse2neon.h" ]; then
+            mkdir -p "$LIBDIR/sse2neon/include"
+            cp "$LIBDIR/sse2neon/sse2neon.h" "$LIBDIR/sse2neon/include/"
+          fi
+          test -f "$LIBDIR/sse2neon/include/sse2neon.h" || { echo "ERROR: sse2neon layout not fixed"; exit 1; }
+          echo "sse2neon OK: $(ls "$LIBDIR/sse2neon/include")"
+
       - name: Cache staged Android SDK
         id: cache-sdk
         uses: actions/cache/restore@v4
