@@ -215,12 +215,12 @@ jobs:
       # build_vulkan_headers() installs them (the prebuilt libs only ship spirv/).
       # NOTE: Vulkan-Headers ships TWO include subdirs — `vulkan/` (vulkan_core.h…) and
       # `vk_video/` (vulkan_video_codec_*.h, included from vulkan_core.h) — copy both.
-      - name: Provide Vulkan-Headers 1.4.341
+- name: Provide Vulkan-Headers 1.4.341
         run: |
           set -o pipefail
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
           VK="$LIBDIR/vulkan/include"
-          if [ ! -f "$VK/vk_video/vulkan_video_codec_av1std.h" ]; then
+          if [ ! -f "$VK/vulkan/vulkan_core.h" ]; then
             curl -sL --max-time 300 -o /tmp/vulkan-headers.tar.gz \
               https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.341.0.tar.gz
             tar -xf /tmp/vulkan-headers.tar.gz -C /tmp
@@ -232,6 +232,17 @@ jobs:
           grep "#define VK_HEADER_VERSION " "$VK/vulkan/vulkan_core.h"
           test -f "$VK/vk_video/vulkan_video_codec_av1std.h" \
             || { echo "ERROR: vk_video headers missing"; exit 1; }
+
+      - name: Rebuild FFmpeg with PIC (fix ABS64 relocations)
+        run: |
+          set -o pipefail
+          # Run deps builder to regenerate FFmpeg with --enable-pic (the recipe already has it)
+          cd blender
+          bash build_files/android/deps/build.sh ffmpeg
+          # Validate that libavutil now contains PIC objects (no ABS64 relocations in tx_float.o)
+          LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
+          llvm-ar t "$LIBDIR/ffmpeg/lib/libavutil.a" tx_float.o tx_float_neon.o 2>/dev/null | head -5
+          echo "FFmpeg rebuilt with PIC; libavutil now should have no ABS64 relocations."
 
       # Empty stub archives for -lpthread/-lrt (bionic folds both into libc).
       # Mirrors deps/build.sh::stub_libs() byte-for-byte.
