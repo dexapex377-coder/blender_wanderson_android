@@ -1,0 +1,248 @@
+name: Wanderson Android Build
+
+on:
+  workflow_dispatch:
+
+# End-to-end CI build of Wanderson's blender_for_android port (Blender 5.3a alpha 2).
+# Uses the repo's own build stack, byte-for-byte:
+#   build_files/android/build_apk.sh full
+# which: (1) builds host codegen tools (makesdna/makesrna/datatoc/msgfmt/shader_tool)
+# with the same android_features_full.cmake feature set, (2) cross-compiles libblender.so
+# via platform_android.cmake, and (3) packages the APK with build_files/android/apk/package.sh
+# (aapt2 + d8 + apksigner, NO gradle).
+#
+# Configuration notes mirroring what the deps builder (deps/build.sh) produces:
+#   - libs are harvested in `${BUILD_BASE}/lib/android_arm64`, NOT in-repo.
+#   - `${LIBDIR}/.stublibs` (empty libpthread.a/librt.a) satisfies deps that emit -lpthread/-lrt
+#     (bionic folds both into libc). Created here, matching deps/build.sh::stub_libs().
+#   - `${LIBDIR}/vulkan/include` needs Vulkan-Headers 1.4.341 (deps/build.sh::build_vulkan_headers())
+#     because the NDK ships older headers and Blender 5.3 uses newer Vulkan structs.
+#   - NDK r28.2.13676358 + JDK 17 + build-tools 35.0.1 + platforms android-35, as env.sh/package.sh
+#     expect. GIF LFS objects come from projects.blender.org (GitHub mirror serves 130-byte pointers).
+#
+# env.sh is intentionally NOT exported here: build_apk.sh unsets ANDROID_HOME/NDK_ROOT and derives
+# them from $HOME/android-sdk, so we stage the whole SDK there and only pre-set the knobs env.sh
+# respects (JAVA_HOME, ANDROID_NDK_VERSION).
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout this repository (main, no LFS)
+        uses: actions/checkout@v4
+        with:
+          path: blender
+          ref: main
+          lfs: false
+
+      - name: Resolve required Git LFS files from the official Blender repo
+        run: |
+          set -o pipefail
+          cd blender
+          git lfs install --local
+          git remote add upstream-lfs https://projects.blender.org/blender/blender.git
+          # Only the paths used at package/runtime time. package.sh copies release/datafiles,
+          # scripts, assets, locale/*.po; the rest of the tree is plain source.
+          INCLUDE="release/datafiles/**,scripts/**,assets/**,locale/**"
+          git lfs fetch upstream-lfs --include "$INCLUDE"
+          git lfs pull --include "$INCLUDE"
+          echo "LFS files resolved."
+
+      - name: Verify resolved LFS files
+        run: |
+          set -o pipefail
+          cd blender
+          SIZE_SB=$(stat -c%s release/datafiles/startup.blend)
+          echo "startup.blend size: $SIZE_SB (real content, not a stub)"
+          [ "$SIZE_SB" -gt 1024 ] || { echo "ERROR: startup.blend is an LFS stub"; exit 1; }
+          PNG=$(git ls-files 'assets/**/*.png' | head -1)
+          MAGIC=$(head -c4 "$PNG" | od -An -tx1 | tr -d ' \n')
+          [ "$MAGIC" = "89504e47" ] || { echo "ERROR: $PNG is still a stub (magic=$MAGIC)"; exit 1; }
+          echo "Assets OK (first asset PNG: $PNG)."
+          echo "=== remaining git modifications (should be empty) ==="
+          git status --short | head -20
+          echo "Required LFS files verified OK."
+
+      - name: Resolve precompiled libs commit IDs
+        id: libs-commit
+        run: |
+          echo "arm=$(git ls-remote https://projects.blender.org/blender/lib-android_arm64.git HEAD | cut -f1)" >> $GITHUB_OUTPUT
+          echo "x64=$(git ls-remote https://projects.blender.org/blender/lib-linux_x64.git HEAD | cut -f1)" >> $GITHUB_OUTPUT
+
+      # Android deps are harvested OUTSIDE the repo at $GITHUB_WORKSPACE/blender_build_android,
+      # matching build_apk.sh's BUILD_BASE (default = sibling of the checkout).
+      - uses: actions/cache/restore@v4
+        id: cache-libs-android
+        with:
+          path: blender_build_android/lib/android_arm64
+          key: libs-android-${{ steps.libs-commit.outputs.arm }}
+
+      - uses: actions/cache/restore@v4
+        id: cache-libs-x64
+        with:
+          path: blender/lib/linux_x64
+          key: libs-x64-${{ steps.libs-commit.outputs.x64 }}
+
+      - name: Clone precompiled libs (Android ARM64 — target build)
+        if: steps.cache-libs-android.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          mkdir -p blender_build_android
+          git clone --depth 1 https://projects.blender.org/blender/lib-android_arm64.git blender_build_android/lib/android_arm64
+          cd blender_build_android/lib/android_arm64
+          git lfs install
+          git lfs pull
+
+      - name: Clone precompiled libs (Linux x64 — host codegen tools)
+        if: steps.cache-libs-x64.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          git clone --depth 1 https://projects.blender.org/blender/lib-linux_x64.git blender/lib/linux_x64
+          cd blender/lib/linux_x64
+          git lfs install
+          git lfs pull
+
+      - uses: actions/cache/save@v4
+        if: steps.cache-libs-android.outputs.cache-hit != 'true'
+        with:
+          path: blender_build_android/lib/android_arm64
+          key: libs-android-${{ steps.libs-commit.outputs.arm }}
+
+      - uses: actions/cache/save@v4
+        if: steps.cache-libs-x64.outputs.cache-hit != 'true'
+        with:
+          path: blender/lib/linux_x64
+          key: libs-x64-${{ steps.libs-commit.outputs.x64 }}
+
+      - name: Verify libs
+        run: |
+          set -o pipefail
+          SIZE_ARM=$(stat -c%s blender_build_android/lib/android_arm64/zstd/lib/libzstd.a 2>/dev/null || echo 0)
+          echo "ARM64 zstd.a: $SIZE_ARM bytes"
+          SIZE_X64=$(stat -c%s blender/lib/linux_x64/zstd/lib/libzstd.a 2>/dev/null || echo 0)
+          echo "x64 zstd.a: $SIZE_X64 bytes"
+          if [ "$SIZE_ARM" -lt 1000 ] || [ "$SIZE_X64" -lt 1000 ]; then
+            echo "ERROR: LFS pointer not resolved"
+            exit 1
+          fi
+          [ -d blender_build_android/lib/android_arm64/python/lib/python3.13 ] \
+            || { echo "ERROR: python3.13 runtime missing"; exit 1; }
+          echo "Both libs OK."
+
+      - name: Stage Android SDK ($HOME/android-sdk as env.sh expects)
+        id: sdk
+        run: |
+          set -o pipefail
+          # env.sh (Linux) defaults ANDROID_HOME=$HOME/android-sdk, and build_apk.sh unsets any
+          # injected ANDROID_HOME. Stage the full SDK there, keyed by the NDK version env.sh wants.
+          SDK="$HOME/android-sdk"
+          mkdir -p "$SDK"
+          # Reuse the runner's preinstalled sdkmanager to install into our staged root.
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            yes | "$SDKM" --sdk_root="$SDK" \
+              "ndk;28.2.13676358" \
+              "build-tools;35.0.1" \
+              "platforms;android-35" \
+              "platform-tools"
+          else
+            echo "ERROR: sdkmanager not found at $SDKM" >&2
+            exit 1
+          fi
+          echo "SDK staged at $SDK:"
+          ls "$SDK"
+          ls "$SDK/ndk"
+
+      - name: Install host build tools
+        run: |
+          set -o pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14 ninja-build pkg-config python3-dev patchelf cmake
+          gcc-14 --version | head -1
+          cmake --version | head -1
+          ninja --version
+          patchelf --version
+
+      - name: Setup JDK 17
+        id: setup-java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # Vulkan-Headers 1.4.341 into ${LIBDIR}/vulkan/include, exactly as deps/build.sh's
+      # build_vulkan_headers() installs them (the prebuilt libs only ship spirv/).
+      - name: Provide Vulkan-Headers 1.4.341
+        run: |
+          set -o pipefail
+          LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
+          VK="$LIBDIR/vulkan/include"
+          if [ ! -f "$VK/vulkan/vulkan_core.h" ]; then
+            curl -sL --max-time 300 -o /tmp/vulkan-headers.tar.gz \
+              https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.341.0.tar.gz
+            tar -xf /tmp/vulkan-headers.tar.gz -C /tmp
+            mkdir -p "$VK"
+            cp -R /tmp/Vulkan-Headers-*/include/vulkan "$VK/"
+            rm -rf /tmp/Vulkan-Headers-*
+          fi
+          grep "#define VK_HEADER_VERSION " "$VK/vulkan/vulkan_core.h"
+          grep -Hn "VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT" "$VK/vulkan/vulkan_core.h" | head -1
+
+      # Empty stub archives for -lpthread/-lrt (bionic folds both into libc).
+      # Mirrors deps/build.sh::stub_libs() byte-for-byte.
+      - name: Create .stublibs
+        run: |
+          set -o pipefail
+          LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
+          STUB="$LIBDIR/.stublibs"
+          if [ ! -f "$STUB/libpthread.a" ]; then
+            NDK="$HOME/android-sdk/ndk/28.2.13676358"
+            CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+            AR="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+            [ -x "$CLANG" ] || { echo "ERROR: NDK clang missing"; exit 1; }
+            mkdir -p "$STUB"
+            echo "" > /tmp/stub_empty.c
+            "$CLANG" -c /tmp/stub_empty.c -o /tmp/stub_empty.o
+            "$AR" rcs "$STUB/libpthread.a" /tmp/stub_empty.o
+            "$AR" rcs "$STUB/librt.a" /tmp/stub_empty.o
+            rm -f /tmp/stub_empty.c /tmp/stub_empty.o
+          fi
+          ls -la "$STUB"
+          # android_features_full.cmake wants draco ON (glTF add-on bridge);
+          # confirm our harvested libs actually carry it.
+          [ -d "$LIBDIR/draco" ] || { echo "ERROR: draco missing from libs"; exit 1; }
+
+      - name: Build APK (build_apk.sh full)
+        run: |
+          set -o pipefail
+          cd blender
+          export JAVA_HOME="${{ steps.setup-java.outputs.path }}"
+          export ANDROID_NDK_VERSION=28.2.13676358
+          export ANDROID_API=31
+          bash build_files/android/build_apk.sh full 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-android-apk
+          path: blender_build_android/android_apk_stage_full/blender-full.apk
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build_apk.log
+            blender_build_android/build_host_tools_full/CMakeCache.txt
+            blender_build_android/build_android_full/CMakeCache.txt
+            blender_build_android/**/*.log
+          if-no-files-found: ignore
