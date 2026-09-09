@@ -48,7 +48,8 @@ jobs:
           git lfs install --local
           # Only the paths used at package/runtime time. package.sh copies release/datafiles,
           # scripts, assets, locale/*.po; the rest of the tree is plain source.
-          INCLUDE="release/datafiles/** scripts/** assets/** locale/**"
+          # NOTE: `--include` needs COMMA-separated globs; spaces silently match nothing.
+          INCLUDE="release/datafiles/**,scripts/**,assets/**,locale/**"
           git lfs pull --include="$INCLUDE"
           echo "LFS files resolved."
 
