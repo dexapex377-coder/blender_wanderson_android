@@ -40,10 +40,6 @@ include(${CMAKE_SOURCE_DIR}/build_files/android/android_features_${BLENDER_ANDRO
 foreach(_lf CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS)
   string(APPEND ${_lf} " -L${LIBDIR}/.stublibs")
 endforeach()
-# shaderc_combined.a (prebuilt with an older NDK) references
-# std::__ndk1::__hash_memory which NDK 28 no longer exports from libc++.
-# The stub .a in .stublibs provides it.
-string(APPEND CMAKE_SHARED_LINKER_FLAGS " -lndk_compat")
 
 # NDK libc++ lacks std::atomic_ref (C++20); force-include a polyfill.
 string(APPEND CMAKE_CXX_FLAGS

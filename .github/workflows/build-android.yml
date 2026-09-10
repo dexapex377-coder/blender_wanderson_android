@@ -17,13 +17,15 @@ on:
 #     (bionic folds both into libc). Created here, matching deps/build.sh::stub_libs().
 #   - `${LIBDIR}/vulkan/include` needs Vulkan-Headers 1.4.341 (deps/build.sh::build_vulkan_headers())
 #     because the NDK ships older headers and Blender 5.3 uses newer Vulkan structs.
-#   - NDK r28.2.13676358 + JDK 17 + build-tools 35.0.1 + platforms android-35, as env.sh/package.sh
-#     expect. LFS objects are served anonymously by the GitHub LFS store of this fork (the parent
-#     repo keeps its own store; the objects are NOT on projects.blender.org -- see the checkout step).
+#   - NDK r30 (matching the official Blender Android port). The prebuilt libs from
+#     projects.blender.org were compiled with NDK 30, so NDK 28 caused libc++ symbol mismatches
+#     (std::__ndk1::__hash_memory missing). NDK 30 is staged directly with sdkmanager into
+#     $HOME/android-sdk (folder 30.0.14904198). JDK 17 + build-tools 35.0.1 + platforms android-35.
+#   - LFS objects are served anonymously by the GitHub LFS store of this fork.
 #
 # env.sh is intentionally NOT exported here: build_apk.sh unsets ANDROID_HOME/NDK_ROOT and derives
-# them from $HOME/android-sdk, so we stage the whole SDK there and only pre-set the knobs env.sh
-# respects (JAVA_HOME, ANDROID_NDK_VERSION).
+# them from $HOME/android-sdk. NDK 30 is staged into $ANDROID_HOME/ndk/30.0.14904198 so env.sh
+# resolves ANDROID_NDK_ROOT correctly (ANDROID_NDK_VERSION is exported = 30.0.14904198).
 
 jobs:
   build:
@@ -40,15 +42,8 @@ jobs:
       - name: Resolve required Git LFS files from the GitHub store
         run: |
           set -o pipefail
-          # WARNING: do NOT fetch these from projects.blender.org -- the LFS objects of
-          # Wanderson's fork (360 files; some datafiles/assets are customized) do NOT exist
-          # upstream (404). The GitHub mirror serves them anon since the parent repo keeps
-          # its LFS store, and this fork inherits it. Keep the origin remote as-is.
           cd blender
           git lfs install --local
-          # Only the paths used at package/runtime time. package.sh copies release/datafiles,
-          # scripts, assets, locale/*.po; the rest of the tree is plain source.
-          # NOTE: `--include` needs COMMA-separated globs; spaces silently match nothing.
           INCLUDE="release/datafiles/**,scripts/**,assets/**,locale/**"
           git lfs pull --include="$INCLUDE"
           echo "LFS files resolved."
@@ -75,8 +70,6 @@ jobs:
           echo "arm=$(git ls-remote https://projects.blender.org/blender/lib-android_arm64.git HEAD | cut -f1)" >> $GITHUB_OUTPUT
           echo "x64=$(git ls-remote https://projects.blender.org/blender/lib-linux_x64.git HEAD | cut -f1)" >> $GITHUB_OUTPUT
 
-      # Android deps are harvested OUTSIDE the repo at $GITHUB_WORKSPACE/blender_build_android,
-      # matching build_apk.sh's BUILD_BASE (default = sibling of the checkout).
       - uses: actions/cache/restore@v4
         id: cache-libs-android
         with:
@@ -139,9 +132,6 @@ jobs:
         run: |
           set -o pipefail
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
-          # The projects.blender.org prebuilt libs install sse2neon.h at the package ROOT,
-          # but platform_android.cmake hardcodes SSE2NEON_INCLUDE_DIR=${LIBDIR}/sse2neon/include
-          # (Wanderson's deps/build.sh::build_sse2neon()). Align the layout.
           if [ -f "$LIBDIR/sse2neon/sse2neon.h" ] && [ ! -f "$LIBDIR/sse2neon/include/sse2neon.h" ]; then
             mkdir -p "$LIBDIR/sse2neon/include"
             cp "$LIBDIR/sse2neon/sse2neon.h" "$LIBDIR/sse2neon/include/"
@@ -149,29 +139,29 @@ jobs:
           test -f "$LIBDIR/sse2neon/include/sse2neon.h" || { echo "ERROR: sse2neon layout not fixed"; exit 1; }
           echo "sse2neon OK: $(ls "$LIBDIR/sse2neon/include")"
 
+      # NDK r30 beta1 (30.0.14904198) staged into $HOME/android-sdk as env.sh expects.
+      # REQUIRED (per Simfeo's BUILDING.md, the repo this port derives from): the prebuilt libs
+      # are compiled with clang 21 and reference std::__ndk1::__hash_memory, a libc++ internal
+      # that NDK 28 does not provide. NDK 28 produces a link error or an APK that dies at startup.
       - name: Cache staged Android SDK
         id: cache-sdk
         uses: actions/cache/restore@v4
         with:
           path: ~/android-sdk
-          key: android-sdk-28.2.13676358
+          key: android-sdk-30.0.14904198
 
       - name: Stage Android SDK ($HOME/android-sdk as env.sh expects)
         id: sdk
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           set -o pipefail
-          # env.sh (Linux) defaults ANDROID_HOME=$HOME/android-sdk, and build_apk.sh unsets any
-          # injected ANDROID_HOME. Stage the full SDK there, keyed by the NDK version env.sh wants.
           SDK="$HOME/android-sdk"
           mkdir -p "$SDK/licenses"
-          # Reuse the runner's preinstalled sdkmanager to install into our staged root, and
-          # copy the pre-accepted licenses instead of piping `yes` (SIGPIPE breaks pipefail).
           cp "$ANDROID_HOME/licenses/"* "$SDK/licenses/" 2>/dev/null || true
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           if [ -x "$SDKM" ]; then
             "$SDKM" --sdk_root="$SDK" \
-              "ndk;28.2.13676358" \
+              "ndk;30.0.14904198" \
               "build-tools;35.0.1" \
               "platforms;android-35" \
               "platform-tools"
@@ -187,7 +177,18 @@ jobs:
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         with:
           path: ~/android-sdk
-          key: android-sdk-28.2.13676358
+          key: android-sdk-30.0.14904198
+
+      - name: Verify NDK 30
+        run: |
+          set -o pipefail
+          NDK="$HOME/android-sdk/ndk/30.0.14904198"
+          echo "NDK path: $NDK"
+          cat "$NDK/source.properties" | head -5
+          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+          [ -x "$CLANG" ] || { echo "ERROR: NDK 30 clang missing"; exit 1; }
+          "$CLANG" --version | head -2
+          echo "NDK 30 OK."
 
       - name: Install host build tools
         run: |
@@ -213,8 +214,6 @@ jobs:
 
       # Vulkan-Headers 1.4.341 into ${LIBDIR}/vulkan/include, exactly as deps/build.sh's
       # build_vulkan_headers() installs them (the prebuilt libs only ship spirv/).
-      # NOTE: Vulkan-Headers ships TWO include subdirs -- `vulkan/` (vulkan_core.h...) and
-      # `vk_video/` (vulkan_video_codec_*.h, included from vulkan_core.h) -- copy both.
       - name: Provide Vulkan-Headers 1.4.341
         run: |
           set -o pipefail
@@ -237,19 +236,15 @@ jobs:
         run: |
           set -o pipefail
           cd blender
-          # FFmpeg's build recipe (--enable-pic is already in build_ffmpeg()) needs these
-          # codec libs to be present in $LIBDIR. They are NOT in the prebuilt libs from
-          # projects.blender.org, so we build them from source here. build.sh skips any
-          # dep whose install dir already has content (checked via dep_is_built).
           echo "=== Building FFmpeg codec dependencies ==="
           bash build_files/android/deps/build.sh \
             openjpeg ogg vorbis theora opus lame aom x265 vpx x264
           echo "=== Building FFmpeg (with PIC) ==="
           bash build_files/android/deps/build.sh ffmpeg
-          # Validate
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
+          NDK="$HOME/android-sdk/ndk/30.0.14904198"
           echo "=== Validating libavutil PIC ==="
-          "$HOME/android-sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" \
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" \
             --print-file-type "$LIBDIR/ffmpeg/lib/libavutil.a" 2>/dev/null | grep -c "ABS" || true
           echo "FFmpeg + codec deps built with PIC."
 
@@ -260,33 +255,16 @@ jobs:
           set -o pipefail
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
           STUB="$LIBDIR/.stublibs"
-          NDK="$HOME/android-sdk/ndk/28.2.13676358"
+          NDK="$HOME/android-sdk/ndk/30.0.14904198"
           CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
           AR="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           [ -x "$CLANG" ] || { echo "ERROR: NDK clang missing"; exit 1; }
           mkdir -p "$STUB"
-          # pthread/rt stubs (bionic folds both into libc)
           echo "" > /tmp/stub_empty.c
           "$CLANG" -c /tmp/stub_empty.c -o /tmp/stub_empty.o
           "$AR" rcs "$STUB/libpthread.a" /tmp/stub_empty.o
           "$AR" rcs "$STUB/librt.a" /tmp/stub_empty.o
-          # libndk_compat: provides std::__ndk1::__hash_memory missing from NDK 28 libc++
-          cat > /tmp/ndk_compat.cpp << 'STUBEOF'
-          #include <cstddef>
-          #include <cstdint>
-          namespace std { namespace __ndk1 {
-          size_t __hash_memory(const void* __ptr, size_t __len) noexcept {
-            const unsigned char* p = static_cast<const unsigned char*>(__ptr);
-            size_t __h = __len;
-            for (size_t __i = 0; __i < __len; ++__i)
-              __h = (__h << 5) - __h + p[__i];
-            return __h;
-          }
-          }}
-          STUBEOF
-          "$CLANG" -std=c++17 -fPIC -c /tmp/ndk_compat.cpp -o /tmp/ndk_compat.o
-          "$AR" rcs "$STUB/libndk_compat.a" /tmp/ndk_compat.o
-          rm -f /tmp/stub_empty.c /tmp/stub_empty.o /tmp/ndk_compat.cpp /tmp/ndk_compat.o
+          rm -f /tmp/stub_empty.c /tmp/stub_empty.o
           ls -la "$STUB"
           [ -d "$LIBDIR/draco" ] || { echo "ERROR: draco missing from libs"; exit 1; }
 
@@ -295,7 +273,8 @@ jobs:
           set -o pipefail
           cd blender
           export JAVA_HOME="${{ steps.setup-java.outputs.path }}"
-          export ANDROID_NDK_VERSION=28.2.13676358
+          export ANDROID_NDK_VERSION="30.0.14904198"
+          export ANDROID_HOME="$HOME/android-sdk"
           export ANDROID_API=31
           bash build_files/android/build_apk.sh full 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
 

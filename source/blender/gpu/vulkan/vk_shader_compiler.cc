@@ -33,19 +33,26 @@ static CLG_LogRef LOG = {"gpu.vulkan"};
  * emitted as. Vulkan 1.2 emits SPIR-V 1.5; a Vulkan 1.1 device (e.g. Adreno 642L) only accepts
  * SPIR-V 1.3.
  *
- * Qualcomm is asked for the older version whatever it reports supporting. Its shader compiler
- * refuses a number of compute modules emitted as SPIR-V 1.5 -- modules `spirv-val` accepts and
- * every desktop driver builds -- answering VK_ERROR_UNKNOWN from vkCreateComputePipelines with
- * nothing in its own log beyond "Shader compilation failed for shaderType: 5". Those modules are
- * the ones EEVEE uses for shadows and light culling, so there is no turning the effect off
+ * On Android all mobile GPU drivers (Adreno, Mali and PowerVR) are asked for the older version
+ * whatever it reports supporting. Their shader compilers refuse or mishandle a number of modules
+ * emitted as SPIR-V 1.5 -- modules `spirv-val` accepts and every desktop driver builds -- failing
+ * with VK_ERROR_UNKNOWN from vkCreateComputePipelines, or emitting `OpCopyLogical` for struct
+ * copies (SPIR-V >= 1.4) that several of these drivers reject at pipeline creation. Those modules
+ * are the ones EEVEE uses for shadows and light culling, so there is no turning the effect off
  * instead. Blender asks for no SPIR-V 1.4 or 1.5 feature, so the older target costs nothing; the
- * workaround right below, which turns the optimizer off for this same driver, has the same shape.
+ * workaround right below, which turns the optimizer off for the same drivers, has the same shape.
  */
 static bool compile_for_vulkan_11()
 {
+#ifdef __ANDROID__
+  /* Mobile GPU drivers (Adreno, Mali and PowerVR) reject or mishandle SPIR-V >= 1.3/1.4 modules;
+   * compile for Vulkan 1.1 / SPIR-V 1.3 on all Android devices regardless of the reported version. */
+  return true;
+#else
   const uint32_t api_version = VKBackend::get().device.physical_device_properties_get().apiVersion;
   return api_version < VK_API_VERSION_1_2 ||
          GPU_type_matches(GPU_DEVICE_QUALCOMM, GPU_OS_ANY, GPU_DRIVER_ANY);
+#endif
 }
 
 static std::optional<std::string> cache_dir_get()
