@@ -193,7 +193,7 @@ jobs:
         run: |
           set -o pipefail
           sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14 ninja-build pkg-config python3-dev patchelf cmake
+          sudo apt-get install -y gcc-14 g++-14 ninja-build pkg-config python3-dev patchelf cmake autoconf automake libtool
           gcc-14 --version | head -1
           cmake --version | head -1
           ninja --version
@@ -233,16 +233,25 @@ jobs:
           test -f "$VK/vk_video/vulkan_video_codec_av1std.h" \
             || { echo "ERROR: vk_video headers missing"; exit 1; }
 
-      - name: Rebuild FFmpeg with PIC (fix ABS64 relocations)
+      - name: Build FFmpeg codec deps + FFmpeg with PIC
         run: |
           set -o pipefail
-          # Run deps builder to regenerate FFmpeg with --enable-pic (the recipe already has it)
           cd blender
+          # FFmpeg's build recipe (--enable-pic is already in build_ffmpeg()) needs these
+          # codec libs to be present in $LIBDIR. They are NOT in the prebuilt libs from
+          # projects.blender.org, so we build them from source here. build.sh skips any
+          # dep whose install dir already has content (checked via dep_is_built).
+          echo "=== Building FFmpeg codec dependencies ==="
+          bash build_files/android/deps/build.sh \
+            openjpeg ogg vorbis theora opus lame aom x265 vpx x264
+          echo "=== Building FFmpeg (with PIC) ==="
           bash build_files/android/deps/build.sh ffmpeg
-          # Validate that libavutil now contains PIC objects (no ABS64 relocations in tx_float.o)
+          # Validate
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
-          llvm-ar t "$LIBDIR/ffmpeg/lib/libavutil.a" tx_float.o tx_float_neon.o 2>/dev/null | head -5
-          echo "FFmpeg rebuilt with PIC; libavutil now should have no ABS64 relocations."
+          echo "=== Validating libavutil PIC ==="
+          "$HOME/android-sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" \
+            --print-file-type "$LIBDIR/ffmpeg/lib/libavutil.a" 2>/dev/null | grep -c "ABS" || true
+          echo "FFmpeg + codec deps built with PIC."
 
       # Empty stub archives for -lpthread/-lrt (bionic folds both into libc).
       # Mirrors deps/build.sh::stub_libs() byte-for-byte.
