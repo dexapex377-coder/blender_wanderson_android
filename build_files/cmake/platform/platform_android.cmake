@@ -40,6 +40,11 @@ include(${CMAKE_SOURCE_DIR}/build_files/android/android_features_${BLENDER_ANDRO
 foreach(_lf CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS)
   string(APPEND ${_lf} " -L${LIBDIR}/.stublibs")
 endforeach()
+# shaderc_combined.a and other prebuilt NDK-compiled static libs use libc++
+# (std::__ndk1 namespace). NDK r28 defaults to libc++ but the link also passes
+# -static-libstdc++, which resolves libstdc++ symbols only. Adding -lc++
+# brings in the NDK libc++ shared library so __ndk1 symbols resolve.
+string(APPEND CMAKE_SHARED_LINKER_FLAGS " -lc++")
 
 # NDK libc++ lacks std::atomic_ref (C++20); force-include a polyfill.
 string(APPEND CMAKE_CXX_FLAGS
