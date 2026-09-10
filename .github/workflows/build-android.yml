@@ -19,13 +19,15 @@ on:
 #     because the NDK ships older headers and Blender 5.3 uses newer Vulkan structs.
 #   - NDK r30 (matching the official Blender Android port). The prebuilt libs from
 #     projects.blender.org were compiled with NDK 30, so NDK 28 caused libc++ symbol mismatches
-#     (std::__ndk1::__hash_memory missing). NDK 30 is staged directly with sdkmanager into
-#     $HOME/android-sdk (folder 30.0.14904198). JDK 17 + build-tools 35.0.1 + platforms android-35.
+#     (std::__ndk1::__hash_memory missing). NDK 30 is downloaded directly with nttld/setup-ndk
+#     (r30-beta1) -- NOT sdkmanager, which prompts for the android-sdk-preview-license. It is
+#     symlinked into $HOME/android-sdk/ndk/<full-version> so env.sh resolves it. JDK 17 +
+#     build-tools 35.0.1 + platforms android-35.
 #   - LFS objects are served anonymously by the GitHub LFS store of this fork.
 #
 # env.sh is intentionally NOT exported here: build_apk.sh unsets ANDROID_HOME/NDK_ROOT and derives
-# them from $HOME/android-sdk. NDK 30 is staged into $ANDROID_HOME/ndk/30.0.14904198 so env.sh
-# resolves ANDROID_NDK_ROOT correctly (ANDROID_NDK_VERSION is exported = 30.0.14904198).
+# them from $HOME/android-sdk. NDK 30 is linked into $ANDROID_HOME/ndk/30.0.14904198-beta1 so
+# env.sh resolves ANDROID_NDK_ROOT correctly (ANDROID_NDK_VERSION is exported from setup-ndk).
 
 jobs:
   build:
@@ -139,11 +141,13 @@ jobs:
           test -f "$LIBDIR/sse2neon/include/sse2neon.h" || { echo "ERROR: sse2neon layout not fixed"; exit 1; }
           echo "sse2neon OK: $(ls "$LIBDIR/sse2neon/include")"
 
-      # NDK r30 beta1 (30.0.14904198) staged into $HOME/android-sdk as env.sh expects.
-      # REQUIRED (per Simfeo's BUILDING.md, the repo this port derives from): the prebuilt libs
-      # are compiled with clang 21 and reference std::__ndk1::__hash_memory, a libc++ internal
-      # that NDK 28 does not provide. NDK 28 produces a link error or an APK that dies at startup.
-      - name: Cache staged Android SDK
+      # NDK r30-beta1 (30.0.14904198)  matching the official Blender Android port. We download
+      # it directly with nttld/setup-ndk (like the official port) instead of sdkmanager: the NDK
+      # beta needs the android-sdk-preview-license, and sdkmanager prompts to accept it
+      # interactively, which the runner cannot. REQUIRED: the prebuilt libs were compiled with
+      # clang 21 and reference std::__ndk1::__hash_memory, a libc++ internal NDK 28 does not
+      # provide. NDK 28 produces a link error or an APK that dies at startup.
+      - name: Cache staged Android SDK (build-tools/platforms, no NDK)
         id: cache-sdk
         uses: actions/cache/restore@v4
         with:
@@ -161,7 +165,6 @@ jobs:
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           if [ -x "$SDKM" ]; then
             "$SDKM" --sdk_root="$SDK" \
-              "ndk;30.0.14904198" \
               "build-tools;35.0.1" \
               "platforms;android-35" \
               "platform-tools"
@@ -171,7 +174,7 @@ jobs:
           fi
           echo "SDK staged at $SDK:"
           ls "$SDK"
-          ls "$SDK/ndk"
+          ls "$SDK/build-tools" 2>/dev/null || ls "$SDK"
 
       - uses: actions/cache/save@v4
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -179,15 +182,29 @@ jobs:
           path: ~/android-sdk
           key: android-sdk-30.0.14904198
 
+      - name: Setup NDK r30-beta1 (download, no license prompt)
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r30-beta1
+
       - name: Verify NDK 30
         run: |
           set -o pipefail
-          NDK="$HOME/android-sdk/ndk/30.0.14904198"
+          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
+          FULL="${{ steps.setup-ndk.outputs.ndk-full-version }}"
           echo "NDK path: $NDK"
+          echo "NDK full version: $FULL"
           cat "$NDK/source.properties" | head -5
           CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
           [ -x "$CLANG" ] || { echo "ERROR: NDK 30 clang missing"; exit 1; }
           "$CLANG" --version | head -2
+          # env.sh (sourced by build_apk.sh) resolves ANDROID_NDK_ROOT as
+          # $ANDROID_HOME/ndk/$ANDROID_NDK_VERSION with ANDROID_HOME=$HOME/android-sdk.
+          # Link the downloaded NDK there so env.sh finds it by the full version name.
+          mkdir -p "$HOME/android-sdk/ndk"
+          ln -sfn "$NDK" "$HOME/android-sdk/ndk/$FULL"
+          ls -la "$HOME/android-sdk/ndk/"
           echo "NDK 30 OK."
 
       - name: Install host build tools
@@ -242,7 +259,7 @@ jobs:
           echo "=== Building FFmpeg (with PIC) ==="
           bash build_files/android/deps/build.sh ffmpeg
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
-          NDK="$HOME/android-sdk/ndk/30.0.14904198"
+          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
           echo "=== Validating libavutil PIC ==="
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" \
             --print-file-type "$LIBDIR/ffmpeg/lib/libavutil.a" 2>/dev/null | grep -c "ABS" || true
@@ -255,7 +272,7 @@ jobs:
           set -o pipefail
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
           STUB="$LIBDIR/.stublibs"
-          NDK="$HOME/android-sdk/ndk/30.0.14904198"
+          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
           CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
           AR="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           [ -x "$CLANG" ] || { echo "ERROR: NDK clang missing"; exit 1; }
@@ -273,7 +290,7 @@ jobs:
           set -o pipefail
           cd blender
           export JAVA_HOME="${{ steps.setup-java.outputs.path }}"
-          export ANDROID_NDK_VERSION="30.0.14904198"
+          export ANDROID_NDK_VERSION="${{ steps.setup-ndk.outputs.ndk-full-version }}"
           export ANDROID_HOME="$HOME/android-sdk"
           export ANDROID_API=31
           bash build_files/android/build_apk.sh full 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
