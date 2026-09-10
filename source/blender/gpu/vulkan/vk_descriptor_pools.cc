@@ -12,6 +12,7 @@
 #include "vk_context.hh"
 #include "vk_descriptor_pools.hh"
 #include "vk_device.hh"
+#include "vk_state_manager.hh"
 
 namespace blender::gpu {
 
