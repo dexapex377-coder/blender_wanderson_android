@@ -260,21 +260,34 @@ jobs:
           set -o pipefail
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
           STUB="$LIBDIR/.stublibs"
-          if [ ! -f "$STUB/libpthread.a" ]; then
-            NDK="$HOME/android-sdk/ndk/28.2.13676358"
-            CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
-            AR="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-            [ -x "$CLANG" ] || { echo "ERROR: NDK clang missing"; exit 1; }
-            mkdir -p "$STUB"
-            echo "" > /tmp/stub_empty.c
-            "$CLANG" -c /tmp/stub_empty.c -o /tmp/stub_empty.o
-            "$AR" rcs "$STUB/libpthread.a" /tmp/stub_empty.o
-            "$AR" rcs "$STUB/librt.a" /tmp/stub_empty.o
-            rm -f /tmp/stub_empty.c /tmp/stub_empty.o
-          fi
+          NDK="$HOME/android-sdk/ndk/28.2.13676358"
+          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+          AR="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          [ -x "$CLANG" ] || { echo "ERROR: NDK clang missing"; exit 1; }
+          mkdir -p "$STUB"
+          # pthread/rt stubs (bionic folds both into libc)
+          echo "" > /tmp/stub_empty.c
+          "$CLANG" -c /tmp/stub_empty.c -o /tmp/stub_empty.o
+          "$AR" rcs "$STUB/libpthread.a" /tmp/stub_empty.o
+          "$AR" rcs "$STUB/librt.a" /tmp/stub_empty.o
+          # libndk_compat: provides std::__ndk1::__hash_memory missing from NDK 28 libc++
+          cat > /tmp/ndk_compat.cpp << 'STUBEOF'
+          #include <cstddef>
+          #include <cstdint>
+          namespace std { namespace __ndk1 {
+          size_t __hash_memory(const void* __ptr, size_t __len) noexcept {
+            const unsigned char* p = static_cast<const unsigned char*>(__ptr);
+            size_t __h = __len;
+            for (size_t __i = 0; __i < __len; ++__i)
+              __h = (__h << 5) - __h + p[__i];
+            return __h;
+          }
+          }}
+          STUBEOF
+          "$CLANG" -std=c++17 -fPIC -c /tmp/ndk_compat.cpp -o /tmp/ndk_compat.o
+          "$AR" rcs "$STUB/libndk_compat.a" /tmp/ndk_compat.o
+          rm -f /tmp/stub_empty.c /tmp/stub_empty.o /tmp/ndk_compat.cpp /tmp/ndk_compat.o
           ls -la "$STUB"
-          # android_features_full.cmake wants draco ON (glTF add-on bridge);
-          # confirm our harvested libs actually carry it.
           [ -d "$LIBDIR/draco" ] || { echo "ERROR: draco missing from libs"; exit 1; }
 
       - name: Build APK (build_apk.sh full)
