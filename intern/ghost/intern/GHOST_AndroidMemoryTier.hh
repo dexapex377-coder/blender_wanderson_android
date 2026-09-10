@@ -42,18 +42,19 @@ inline bool GHOST_android_is_low_memory_device()
   return is_low_memory;
 }
 
-/** Divisor applied to the native window size. 1 = native, 2 = half resolution. */
-inline uint32_t GHOST_android_render_scale_divisor()
+/** Divisor applied to the native window size. 1 = native, 1.5 = 66.7% linear, 2 = half resolution.
+ *  Fractional values allowed (e.g. 1.5) for a middle-ground between sharpness and render cost. */
+inline float GHOST_android_render_scale_divisor()
 {
-  static const uint32_t divisor = []() -> uint32_t {
+  static const float divisor = []() -> float {
     char value[PROP_VALUE_MAX] = {};
     if (__system_property_get("debug.blender.renderdiv", value) > 0 && value[0] != '\0') {
-      const int v = atoi(value);
-      if (v >= 1 && v <= 4) {
-        return uint32_t(v);
+      const float v = atof(value);
+      if (v >= 1.0f && v <= 4.0f) {
+        return v;
       }
     }
-    return GHOST_android_is_low_memory_device() ? 2 : 1;
+    return GHOST_android_is_low_memory_device() ? 2.0f : 1.0f;
   }();
   return divisor;
 }
@@ -88,8 +89,8 @@ inline uint32_t GHOST_android_ui_dpi()
  */
 inline float ghost_android_scale_input(float value)
 {
-  const uint32_t divisor = GHOST_android_render_scale_divisor();
-  return divisor > 1 ? value / float(divisor) : value;
+  const float divisor = GHOST_android_render_scale_divisor();
+  return divisor > 1.0f ? value / divisor : value;
 }
 
 #endif /* __ANDROID__ */

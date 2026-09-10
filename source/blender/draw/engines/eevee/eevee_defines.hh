@@ -46,7 +46,11 @@
 #define SPHERE_PROBE_GROUP_SIZE 16
 #define SPHERE_PROBE_SELECT_GROUP_SIZE 64
 #define SPHERE_PROBE_MIPMAP_LEVELS 5
-#define SPHERE_PROBE_SH_GROUP_SIZE 256
+/* DOWNSTREAM (Android): reduced from 256 (16KB shared memory → at the exact device limit
+ * on PowerVR BXM-8-256 / maxComputeSharedMemorySize=16384). 128 = 8KB shared memory.
+ * Also reduces the parallel sum loop from 10 to 8 iterations (log2(128)).
+ * Same pattern as SPHERE_PROBE_REMAP_GROUP_SIZE reduction above. */
+#define SPHERE_PROBE_SH_GROUP_SIZE 128
 #define SPHERE_PROBE_SH_SAMPLES_PER_GROUP 64
 /* Must be power of two for correct partitioning. */
 #define SPHERE_PROBE_ATLAS_MAX_SUBDIV 12

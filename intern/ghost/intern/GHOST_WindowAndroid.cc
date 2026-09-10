@@ -24,8 +24,8 @@
  */
 static void ghost_android_apply_render_scale(ANativeWindow *native_window)
 {
-  const uint32_t divisor = GHOST_android_render_scale_divisor();
-  if (native_window == nullptr || divisor <= 1) {
+  const float divisor = GHOST_android_render_scale_divisor();
+  if (native_window == nullptr || divisor <= 1.0f) {
     return;
   }
   const int32_t native_w = ANativeWindow_getWidth(native_window);
@@ -33,13 +33,13 @@ static void ghost_android_apply_render_scale(ANativeWindow *native_window)
   if (native_w <= 0 || native_h <= 0) {
     return;
   }
-  const int32_t w = std::max(1, native_w / int32_t(divisor));
-  const int32_t h = std::max(1, native_h / int32_t(divisor));
+  const int32_t w = std::max(1, int32_t(native_w / divisor));
+  const int32_t h = std::max(1, int32_t(native_h / divisor));
   /* Format 0 keeps the window's current pixel format. */
   ANativeWindow_setBuffersGeometry(native_window, w, h, 0);
   __android_log_print(ANDROID_LOG_INFO,
                       "blender-renderscale",
-                      "native=%dx%d -> buffers=%dx%d (divisor=%u)",
+                      "native=%dx%d -> buffers=%dx%d (divisor=%.2f)",
                       native_w,
                       native_h,
                       w,

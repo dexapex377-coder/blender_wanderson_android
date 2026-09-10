@@ -69,6 +69,10 @@ void VKDescriptorPools::discard_active_pool(VKContext &context)
 {
   context.discard_pool.discard_descriptor_pool_for_reuse(vk_descriptor_pool_, this);
   vk_descriptor_pool_ = VK_NULL_HANDLE;
+  /* All descriptor sets of the discarded pool (including the one VKDescriptorSetTracker caches
+   * for reuse) become invalid once this pool is recycled and reset by the submission thread.
+   * Force a state refresh so the next draw re-allocates instead of reusing a stale handle. */
+  context.state_manager_get().is_dirty = true;
 }
 
 void VKDescriptorPools::recycle(VkDescriptorPool vk_descriptor_pool)

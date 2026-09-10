@@ -133,9 +133,9 @@ void GHOST_SystemAndroid::getMainDisplayDimensions(uint32_t &width, uint32_t &he
 {
   if (app_ && app_->window) {
     /* Report the size Blender renders at, which the render scale may have reduced. */
-    const uint32_t divisor = GHOST_android_render_scale_divisor();
-    width = uint32_t(ANativeWindow_getWidth(app_->window)) / divisor;
-    height = uint32_t(ANativeWindow_getHeight(app_->window)) / divisor;
+    const float divisor = GHOST_android_render_scale_divisor();
+    width = uint32_t(ANativeWindow_getWidth(app_->window) / divisor);
+    height = uint32_t(ANativeWindow_getHeight(app_->window) / divisor);
   }
   else {
     width = height = 0;
@@ -983,8 +983,8 @@ uint16_t GHOST_SystemAndroid::getDPIHint()
 {
   /* Blender's desktop workspace needs substantially more logical room than a mobile UI. Do not
    * pass Android's 450-DPI phone density through directly; use the Android Blender profile. */
-  const uint32_t divisor = GHOST_android_render_scale_divisor();
-  return uint16_t(std::max(96u, GHOST_android_ui_dpi() / divisor));
+  const float divisor = GHOST_android_render_scale_divisor();
+  return uint16_t(std::max(96u, GHOST_android_ui_dpi() / int(divisor)));
 }
 
 /* Call a no-arg void method on the BlenderActivity instance. */

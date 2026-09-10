@@ -438,9 +438,11 @@ void irradiance_sum([[resource_table]] IrradianceSum &srt,
   srt.local_sh_coefs[local_index][2] = sh.L1.M0;
   srt.local_sh_coefs[local_index][3] = sh.L1.Mp1;
 
-  /* Parallel sum. */
+  /* Parallel sum. DOWNSTREAM (Android): 10→8 iterations = log2(SPHERE_PROBE_SH_GROUP_SIZE)
+   * matches reduced group size (was 10 for group_size=256). Redundant iterations are no-ops
+   * but we keep it exact. */
   uint stride = group_size / 2;
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 8; i++) {
     barrier();
     if (local_index < stride) {
       for (int i = 0; i < 4; i++) {
@@ -495,9 +497,9 @@ void sun_extraction([[resource_table]] SunExtraction &srt,
   srt.local_radiance[local_index] = sun.radiance;
   srt.local_direction[local_index] = sun.direction;
 
-  /* Parallel sum. */
+  /* Parallel sum. DOWNSTREAM (Android): 10→8 = log2(SPHERE_PROBE_SH_GROUP_SIZE) */
   uint stride = group_size / 2;
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 8; i++) {
     barrier();
     if (local_index < stride) {
       srt.local_radiance[local_index] += srt.local_radiance[local_index + stride];

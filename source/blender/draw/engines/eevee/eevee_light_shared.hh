@@ -261,8 +261,13 @@ struct [[host_shared]] LightData {
 
 /* Number of items we can cull. Limited by how we store CullingZBin. */
 #define CULLING_MAX_ITEM 65536
-/* Fine grained subdivision in the Z direction. Limited by the LDS in z-binning compute shader. */
-#define CULLING_ZBIN_COUNT 4096
+/* Fine grained subdivision in the Z direction. Limited by the LDS in z-binning compute shader.
+ * Kept below 4096 (32KB of shared memory) so mobile GPUs with
+ * maxComputeSharedMemorySize = 16KB (e.g. PowerVR BXM-8-256 / Dimensity 7060) can run the
+ * z-binning pass: 1024 items * 2 arrays * 4 bytes = 8KB, well within the 16KB limit.
+ * Must be a multiple of CULLING_ZBIN_GROUP_SIZE (1024) for the compute shader to correctly
+ * iterate over all bins. Only scenes with >1024 lights lose z-resolution (rare on mobile). */
+#define CULLING_ZBIN_COUNT 1024
 /* Max tile map resolution per axes. */
 #define CULLING_TILE_RES 16
 
