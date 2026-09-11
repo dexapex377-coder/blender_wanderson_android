@@ -38,6 +38,11 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPRESS: 1
       CCACHE_COMPRESSLEVEL: 6
+      # Compiler identity by content, not mtime: setup-ndk re-extracts the NDK on
+      # every run, so clang's mtime changes and ccache's default 'mtime' policy
+      # treats every compile command as a different compiler => 0% hits. Content
+      # hashing makes the stable NDK restore produce stable cache keys.
+      CCACHE_COMPILERCHECK: content
 
     steps:
       - name: Checkout this repository (main, no LFS)
@@ -188,11 +193,27 @@ jobs:
           path: ~/android-sdk
           key: android-sdk-30.0.14904198
 
+      - name: Restore NDK cache (stable toolchain binary => ccache hits)
+        uses: actions/cache/restore@v4
+        id: cache-ndk-restore
+        with:
+          path: /opt/hostedtoolcache/ndk
+          key: ndk-r30-beta1-${{ runner.os }}
+          restore-keys: |
+            ndk-r30-beta1-${{ runner.os }}
+
       - name: Setup NDK r30-beta1 (download, no license prompt)
         id: setup-ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r30-beta1
+
+      - name: Save NDK cache (skip if already cached)
+        uses: actions/cache/save@v4
+        if: steps.cache-ndk-restore.outputs.cache-hit != 'true'
+        with:
+          path: /opt/hostedtoolcache/ndk
+          key: ndk-r30-beta1-${{ runner.os }}
 
       - name: Verify NDK 30
         run: |
@@ -244,7 +265,7 @@ jobs:
           # 30 GB so a full libblender rebuild stays hot even after several source
           # changes; compression makes the archive fit actions/cache's 10 GB budget.
           ccache -M 30G
-          ccache --show-config 2>/dev/null | grep -iE "max_size|compression" | head -4
+          ccache --show-config 2>/dev/null | grep -iE "max_size|compression|compiler_check" | head -6
           ccache --show-stats | head -8
 
       - name: Setup JDK 17
@@ -315,6 +336,33 @@ jobs:
           ls -la "$STUB"
           [ -d "$LIBDIR/draco" ] || { echo "ERROR: draco missing from libs"; exit 1; }
 
+      # The Build APK step is the one that dominates wall-time (~7439 ninja targets).
+      # Restore the ninja build dirs so ninja can skip already-built objects: any
+      # target whose outputs round-trip through the cache unmodified is not re-run.
+      # This is the ccache complement: build-dir hits skip the per-command spawn +
+      # ccache lookup overhead for unchanged files, ccache absorbs the rest.
+      # both dirs are keyed by ${{ github.sha }} with restore-keys fallback to the
+      # previous successful build.
+      - name: Restore ninja build dir (target)
+        uses: actions/cache/restore@v4
+        id: cache-builddir-target
+        continue-on-error: true
+        with:
+          path: blender_build_android/build_android_full
+          key: builddir-target-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            builddir-target-${{ runner.os }}-
+
+      - name: Restore ninja build dir (host tools)
+        uses: actions/cache/restore@v4
+        id: cache-builddir-host
+        continue-on-error: true
+        with:
+          path: blender_build_android/build_host_tools_full
+          key: builddir-host-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            builddir-host-${{ runner.os }}-
+
       - name: Build APK (build_apk.sh full)
         run: |
           set -o pipefail
@@ -325,8 +373,17 @@ jobs:
           export ANDROID_API=31
           bash build_files/android/build_apk.sh full 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
 
+      - name: Save ninja build dir (target)
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: blender_build_android/build_android_full
+          key: builddir-target-${{ runner.os }}-${{ github.sha }}
+
       - name: Save ccache
         if: always()
+        continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CCACHE_DIR }}

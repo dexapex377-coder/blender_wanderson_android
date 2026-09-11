@@ -14,6 +14,7 @@
 #include "vk_device.hh"
 #include "vk_pipeline_diag.hh"
 #include "vk_state_manager.hh"
+#include "vk_to_string.hh"
 
 namespace blender::gpu {
 
