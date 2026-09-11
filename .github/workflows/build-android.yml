@@ -282,12 +282,20 @@ jobs:
 
       # Vulkan-Headers 1.4.341 into ${LIBDIR}/vulkan/include, exactly as deps/build.sh's
       # build_vulkan_headers() installs them (the prebuilt libs only ship spirv/).
+      # IMPORTANT: gate on the header VERSION, not on file existence — the libs cache
+      # restores older headers, and vk_device.cc diag uses VK 1.1 `subgroupSize` /
+      # VK_FORMAT_R11G11B10_UFLOAT, which old headers do not define.
       - name: Provide Vulkan-Headers 1.4.341
         run: |
           set -o pipefail
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
           VK="$LIBDIR/vulkan/include"
-          if [ ! -f "$VK/vulkan/vulkan_core.h" ]; then
+          CUR=""
+          [ -f "$VK/vulkan/vulkan_core.h" ] && \
+            CUR=$(grep -E "VK_HEADER_VERSION [0-9]+" "$VK/vulkan/vulkan_core.h" | grep -oE "[0-9]+")
+          echo "Current VK_HEADER_VERSION: ${CUR:-none}"
+          if [ -z "$CUR" ] || [ "$CUR" -lt 341 ]; then
+            rm -rf "$VK"
             curl -sL --max-time 300 -o /tmp/vulkan-headers.tar.gz \
               https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.341.0.tar.gz
             tar -xf /tmp/vulkan-headers.tar.gz -C /tmp
@@ -299,6 +307,8 @@ jobs:
           grep "#define VK_HEADER_VERSION " "$VK/vulkan/vulkan_core.h"
           test -f "$VK/vk_video/vulkan_video_codec_av1std.h" \
             || { echo "ERROR: vk_video headers missing"; exit 1; }
+          grep -q "subgroupSize" "$VK/vulkan/vulkan_core.h" \
+            || { echo "ERROR: headers too old (no VkPhysicalDeviceLimits.subgroupSize)"; exit 1; }
 
       - name: Build FFmpeg codec deps + FFmpeg with PIC
         run: |
