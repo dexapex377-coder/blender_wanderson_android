@@ -185,6 +185,10 @@ else
   echo "[apk] Python disabled for bootstrap build"
 fi
 find "$PAYLOAD" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+# CPython ships extension modules for every platform its build recorded
+# (Mach-O `*-darwin.so`, `.dylib`); only the Android ELF ones are useful here
+# and anything else would ship twice (runtime payload + jniLibs).
+find "$PAYLOAD/python" \( -name '*-darwin*' -o -name '*.dylib' -o -name '*.pyd' \) -delete 2>/dev/null || true
 
 echo "[apk] gathering native libraries (unversioned)"
 # Seed queue: libblender + c++_shared + every Python extension module, when
