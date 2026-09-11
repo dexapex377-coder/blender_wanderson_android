@@ -929,6 +929,12 @@ class USERPREF_PT_system_display_graphics(SystemPanel, CenterAlignMixIn, Panel):
             col.enabled = gpu.platform.backend_type_get() == 'VULKAN'
             col.prop(system, "gpu_preferred_device")
 
+        if 'android' in sys.platform:
+            col = layout.column()
+            col.prop(system, "android_render_scale", text="Android Render Scale")
+            col.label(text="1 renders at native resolution; lower values are faster but softer", icon='STATUS_INFO')
+            col.label(text="Applies on restart", icon='STATUS_INFO')
+
         if system.gpu_backend != gpu.platform.backend_type_get():
             layout.label(text="A restart of Blender is required", icon='STATUS_INFO')
 

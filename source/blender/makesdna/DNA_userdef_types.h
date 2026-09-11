@@ -1382,6 +1382,12 @@ struct UserDef {
 
   UserDef_Experimental experimental;
 
+  /**
+   * Android render scale divisor: 1 = native window resolution, 2 = half, etc.
+   * Fractional values are allowed. Debug override: `setprop debug.blender.renderdiv 1.5`.
+   */
+  float android_render_scale = 1.0f;
+
   /** Runtime data (keep last). */
   UserDef_Runtime runtime;
 };

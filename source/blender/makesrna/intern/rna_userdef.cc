@@ -6162,6 +6162,20 @@ static void rna_def_userdef_system(BlenderRNA *brna)
   RNA_def_property_clear_flag(prop, PROP_EDITABLE);
   RNA_def_property_float_sdna(prop, nullptr, "pixelsize");
 
+  /* Android render scale. */
+
+  prop = RNA_def_property(srna, "android_render_scale", PROP_FLOAT, PROP_NONE);
+  RNA_def_property_float_sdna(prop, nullptr, "android_render_scale");
+  RNA_def_property_range(prop, 1.0f, 4.0f);
+  RNA_def_property_ui_range(prop, 1.0, 4.0, 0.1, 2);
+  RNA_def_property_float_default(prop, 1.0f);
+  RNA_def_property_ui_text(
+      prop,
+      "Render Scale Divisor",
+      "Android render scale divisor: 1 renders at native window resolution, 1.5 at 2/3 of the "
+      "resolution, 2 at half, etc. Lower values improve performance at the cost of sharpness.");
+  RNA_def_property_update(prop, NC_WINDOW | NA_EDITED, "rna_userdef_update");
+
   /* Memory */
 
   prop = RNA_def_property(srna, "memory_cache_limit", PROP_INT, PROP_NONE);

@@ -42,11 +42,28 @@ inline bool GHOST_android_is_low_memory_device()
   return is_low_memory;
 }
 
-/** Divisor applied to the native window size. 1 = native, 1.5 = 66.7% linear, 2 = half resolution.
- *  Fractional values allowed (e.g. 1.5) for a middle-ground between sharpness and render cost. */
+/**
+ * Divisor applied to the native window size. 1 = native, 1.5 = 66.7% linear, 2 = half resolution.
+ *  Fractional values allowed (e.g. 1.5) for a middle-ground between sharpness and render cost.
+ *
+ * Priority: `debug.blender.renderdiv` system property (for testing) overrides the value set by
+ * Blender's Preferences ("System" -> Render Scale). The preference starts at 1.0 (native).
+ */
+inline float &GHOST_android_render_scale_divisor_ref()
+{
+  static float divisor = 1.0f;
+  return divisor;
+}
+
+/** Set from Blender's user preferences (UserDef::android_render_scale). */
+inline void GHOST_android_set_render_scale_divisor(float divisor)
+{
+  GHOST_android_render_scale_divisor_ref() = divisor > 0.0f ? divisor : 1.0f;
+}
+
 inline float GHOST_android_render_scale_divisor()
 {
-  static const float divisor = []() -> float {
+  static const float sysprop = []() -> float {
     char value[PROP_VALUE_MAX] = {};
     if (__system_property_get("debug.blender.renderdiv", value) > 0 && value[0] != '\0') {
       const float v = atof(value);
@@ -54,9 +71,12 @@ inline float GHOST_android_render_scale_divisor()
         return v;
       }
     }
-    return GHOST_android_is_low_memory_device() ? 2.0f : 1.0f;
+    return 0.0f;
   }();
-  return divisor;
+  if (sysprop > 0.0f) {
+    return sysprop;
+  }
+  return GHOST_android_render_scale_divisor_ref();
 }
 
 /**
