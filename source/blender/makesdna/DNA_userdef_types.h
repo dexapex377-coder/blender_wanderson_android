@@ -1385,7 +1385,9 @@ struct UserDef {
   /**
    * Android render scale divisor: 1 = native window resolution, 2 = half, etc.
    * Fractional values are allowed. Debug override: `setprop debug.blender.renderdiv 1.5`.
+   * Preceded by a 4-byte pad so `runtime` stays 8-byte aligned (DNA verify).
    */
+  char android_render_scale_pad[4] = {};
   float android_render_scale = 1.0f;
 
   /** Runtime data (keep last). */
