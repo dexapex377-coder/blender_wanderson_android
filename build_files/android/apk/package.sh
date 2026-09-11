@@ -155,6 +155,13 @@ for bridge in meshopt draco; do
   fi
 done
 
+# OIDN loads the CPU device through a dlopen()ed module
+# (libOpenImageDenoise_device_cpu.so) that has no DT_NEEDED edge from the
+# other two libraries, so the NEEDED closure walk below never stages it and
+# Cycles/the compositor end up with no denoiser even though OIDN is linked.
+cp "$LIBDIR/openimagedenoise/lib/libOpenImageDenoise_device_cpu.so" "$JNI/"
+echo "[apk] bundled OIDN device_cpu module (dlopen'ed)"
+
 # USD finds its file-format plugins through the plugInfo.json files here, so
 # without them the importers and exporters are built but never register.
 if [ -d "$LIBDIR/usd/plugin/usd" ]; then

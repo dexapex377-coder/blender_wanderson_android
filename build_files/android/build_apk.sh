@@ -42,6 +42,16 @@ drop_stale_cache() {
 drop_stale_cache "$HOST"
 drop_stale_cache "$BUILD"
 
+# ccache launchers: enabled when ccache is on PATH (the CI workflow sets it up
+# via hendrikmuhs/ccache-action; local builds without it just skip). Both the
+# host codegen tools and the target cross-compile share the same cache, and the
+# prebuilt Android libs compile once-ish then hit from cache on every rerun.
+CCACHE_LAUNCHER=()
+if command -v ccache >/dev/null 2>&1; then
+  CCACHE_LAUNCHER=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+  echo "[build_apk] ccache enabled (host tools + target)"
+fi
+
 echo "=== [$CONFIG] host codegen tools ==="
 # Always re-run CMake for the native code generators. This remains incremental,
 # but it is essential when an Android feature profile changes: makesrna must be
@@ -50,6 +60,7 @@ echo "=== [$CONFIG] host codegen tools ==="
 # Keep the GUI out since the host build only supplies generators.
 cmake -S . -B "$HOST" -G Ninja -C "$FEATURES" -DWITH_CROSSCOMPILED_TOOLS=OFF \
   -DCMAKE_C_COMPILER="$ANDROID_HOST_CC" -DCMAKE_CXX_COMPILER="$ANDROID_HOST_CXX" \
+  "${CCACHE_LAUNCHER[@]}" \
   -DWITH_HEADLESS=ON -DWITH_X11_XINPUT=OFF -DWITH_AUDASPACE=OFF \
   -DCMAKE_BUILD_RPATH="$REPO_ROOT/lib/linux_x64/tbb/lib"
 ninja -C "$HOST" makesdna makesrna datatoc msgfmt shader_tool
@@ -59,7 +70,8 @@ cmake -S . -B "$BUILD" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_TOOLCHAIN_FILE" \
   -DANDROID_ABI="$ANDROID_ABI" -DANDROID_PLATFORM="android-$ANDROID_API" \
   -DBUILD_BASE="$BUILD_BASE" -DCMAKE_BUILD_TYPE=Release \
-  -DBLENDER_ANDROID_CONFIG="$CONFIG"
+  -DBLENDER_ANDROID_CONFIG="$CONFIG" \
+  "${CCACHE_LAUNCHER[@]}"
 # The glTF add-on dlopens the meshopt bridge at run time, so it is not a
 # dependency of the blender target and would never be built otherwise.
 ninja -C "$BUILD" blender bf_intern_meshopt_bridge bf_intern_draco_bridge

@@ -33,6 +33,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: 1
+      CCACHE_COMPRESSLEVEL: 6
+
     steps:
       - name: Checkout this repository (main, no LFS)
         uses: actions/checkout@v4
@@ -211,11 +217,35 @@ jobs:
         run: |
           set -o pipefail
           sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14 ninja-build pkg-config python3-dev patchelf cmake autoconf automake libtool
+          sudo apt-get install -y gcc-14 g++-14 ninja-build ccache pkg-config python3-dev patchelf cmake autoconf automake libtool
           gcc-14 --version | head -1
           cmake --version | head -1
           ninja --version
           patchelf --version
+          ccache --version | head -1
+
+      # Compiler cache enabled in build_apk.sh (CMAKE_C/CXX_COMPILER_LAUNCHER=ccache).
+      # Mirrors the blender-clone (3.6) recipe exactly, the one that took the build
+      # from ~40 min to ~6 min: key by SHA + restore-keys fallback to the last
+      # cached build, and save with always() so the chain never breaks.
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        id: ccache-restore
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-android-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-android-${{ runner.os }}-
+
+      - name: Configure ccache
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          # The repo's own build_apk.sh enables the launcher when ccache is on PATH.
+          # 30 GB so a full libblender rebuild stays hot even after several source
+          # changes; compression makes the archive fit actions/cache's 10 GB budget.
+          ccache -M 30G
+          ccache --show-config 2>/dev/null | grep -iE "max_size|compression" | head -4
+          ccache --show-stats | head -8
 
       - name: Setup JDK 17
         id: setup-java
@@ -294,6 +324,17 @@ jobs:
           export ANDROID_HOME="$HOME/android-sdk"
           export ANDROID_API=31
           bash build_files/android/build_apk.sh full 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-android-${{ runner.os }}-${{ github.sha }}
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats 2>/dev/null | head -12
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
