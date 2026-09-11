@@ -9,6 +9,7 @@
 #include "vk_descriptor_set.hh"
 #include "vk_buffer.hh"
 #include "vk_index_buffer.hh"
+#include "vk_pipeline_diag.hh"
 #include "vk_ray_tracing.hh"
 #include "vk_shader.hh"
 #include "vk_shader_interface.hh"
@@ -660,6 +661,22 @@ void VKDescriptorSetPoolUpdator::upload_descriptor_sets()
 {
   if (vk_write_descriptor_sets_.is_empty()) {
     return;
+  }
+
+  /* The MTK driver faulted (null-deref @0x38) inside upload_descriptor_sets after a pool reset
+   * left a cached descriptor set dangling. With the pool-discard invalidation in place this should
+   * never be null, but refuse to hand a null set to the driver (a crash) if it ever slips through. */
+  if (vk_descriptor_set == VK_NULL_HANDLE) {
+    vk_pipeline_diag_logf("DESCSET upload skipped: cached set is VK_NULL_HANDLE (pending writes %zu)",
+                          vk_write_descriptor_sets_.size());
+    invalidate();
+    return;
+  }
+  static int upload_counter = 0;
+  if ((upload_counter++ % 600) == 0) {
+    vk_pipeline_diag_logf("DESCSET upload set=0x%zX writes=%zu (rate-limited)",
+                          (size_t)vk_descriptor_set,
+                          vk_write_descriptor_sets_.size());
   }
 
   /* Finalize pointers that could have changed due to reallocations. */

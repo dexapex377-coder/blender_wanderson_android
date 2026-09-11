@@ -20,6 +20,7 @@
 #include "GPU_capabilities.hh"
 #include "vk_backend.hh"
 #include "vk_graphics_pipeline.hh"
+#include "vk_pipeline_diag.hh"
 #include "vk_pipeline_pool.hh"
 #include "vk_to_string.hh"
 
@@ -214,6 +215,14 @@ VkPipeline VKPipelineMap<VKComputeInfo>::create(const VKComputeInfo &compute_inf
                vk_pipeline_base == VK_NULL_HANDLE ? "no" : "yes",
                vk_pipeline_cache == VK_NULL_HANDLE ? "no" : "yes");
 
+    vk_pipeline_diag_logf(
+        "COMPUTE FAIL %s | result=%s | spec=%zu | base=%s | cache=%s",
+        name.c_str(),
+        to_string(result),
+        compute_info.specialization_constants.size(),
+        vk_pipeline_base == VK_NULL_HANDLE ? "no" : "yes",
+        vk_pipeline_cache == VK_NULL_HANDLE ? "no" : "yes");
+
     /* Qualcomm's Adreno driver answers VK_ERROR_UNKNOWN for compute pipelines that every desktop
      * driver accepts, and the message carries no reason. Narrow it down by retrying with one
      * input removed at a time: the shared pipeline cache first (the shader compile workers use it
@@ -225,6 +234,9 @@ VkPipeline VKPipelineMap<VKComputeInfo>::create(const VKComputeInfo &compute_inf
           device.vk_handle(), VK_NULL_HANDLE, 1, &vk_compute_pipeline_create_info, nullptr,
           &pipeline);
       CLOG_ERROR(&LOG, "  retry `%s` without pipeline cache: %s", name.c_str(), to_string(retry));
+      vk_pipeline_diag_logf("COMPUTE RETRY-no-cache %s | result=%s",
+                            name.c_str(),
+                            to_string(retry));
       if (retry == VK_SUCCESS) {
         return pipeline;
       }
@@ -235,10 +247,14 @@ VkPipeline VKPipelineMap<VKComputeInfo>::create(const VKComputeInfo &compute_inf
           device.vk_handle(), VK_NULL_HANDLE, 1, &vk_compute_pipeline_create_info, nullptr,
           &pipeline);
       CLOG_ERROR(&LOG, "  retry `%s` without base pipeline: %s", name.c_str(), to_string(retry));
+      vk_pipeline_diag_logf("COMPUTE RETRY-no-base %s | result=%s",
+                            name.c_str(),
+                            to_string(retry));
       if (retry == VK_SUCCESS) {
         return pipeline;
       }
     }
+    vk_pipeline_diag_logf("COMPUTE NOOP-FALLBACK %s", name.c_str());
     return vk_compute_pipeline_noop(device, compute_info.vk_pipeline_layout, name);
   }
   double end_time = BLI_time_now_seconds();
@@ -247,6 +263,10 @@ VkPipeline VKPipelineMap<VKComputeInfo>::create(const VKComputeInfo &compute_inf
              "Compiled compute pipeline %s in %fms ",
              name.c_str(),
              (end_time - start_time) * 1000.0);
+  vk_pipeline_diag_logf("COMPUTE OK %s | time_ms=%.1f | spec=%zu",
+                        name.c_str(),
+                        (end_time - start_time) * 1000.0,
+                        compute_info.specialization_constants.size());
 
   return pipeline;
 }
@@ -297,8 +317,13 @@ static VkPipeline create_graphics_pipeline_no_libs(const VKGraphicsInfo &graphic
                "Failed to compile graphics pipeline `%s`: %s",
                name.c_str(),
                to_string(result));
+    vk_pipeline_diag_logf("GRAPHICS FAIL %s | result=%s", name.c_str(), to_string(result));
   }
   double end_time = BLI_time_now_seconds();
+  if (result == VK_SUCCESS) {
+    vk_pipeline_diag_logf(
+        "GRAPHICS OK %s | time_ms=%.1f", name.c_str(), (end_time - start_time) * 1000.0);
+  }
   debug::object_label(pipeline, name);
   CLOG_DEBUG(&LOG,
              "Compiled graphics pipeline %s in %fms ",

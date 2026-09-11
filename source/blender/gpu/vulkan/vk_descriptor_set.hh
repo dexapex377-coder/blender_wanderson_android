@@ -143,6 +143,25 @@ class VKDescriptorSetPoolUpdator : public VKDescriptorSetUpdator {
 
   void upload_descriptor_sets() override;
 
+  /**
+   * Drop all pending writes and the cached descriptor set handle.
+   *
+   * Once the backing VkDescriptorPool is discarded (recycled by the submission thread) any
+   * VkDescriptorSet it had produced becomes invalid, including this cached handle and the write
+   * list still targeting it. Uploading those stale writes would make the driver dereference freed
+   * pool memory. Call this before the pool is returned for reuse.
+   */
+  void invalidate()
+  {
+    vk_descriptor_set = VK_NULL_HANDLE;
+    vk_buffer_views_.clear();
+    vk_descriptor_buffer_infos_.clear();
+    vk_descriptor_image_infos_.clear();
+    vk_write_descriptor_sets_.clear();
+    vk_write_descrtiptor_sets_acceleration_structures_.clear();
+    vk_acceleration_structures_.clear();
+  }
+
  protected:
   void bind_texel_buffer(VKVertexBuffer &vertex_buffer,
                          VKDescriptorSet::Location location) override;
@@ -193,6 +212,18 @@ class VKDescriptorSetTracker {
    * Upload all descriptor sets to the device.
    */
   void upload_descriptor_sets();
+
+  /**
+   * Invalidate the cached descriptor set state.
+   *
+   * Called when the backing descriptor pool is discarded: the cached set handle and layout must be
+   * dropped so the next update re-allocates instead of reusing a set from the discarded pool.
+   */
+  void invalidate()
+  {
+    vk_descriptor_set_layout_ = VK_NULL_HANDLE;
+    descriptor_sets.invalidate();
+  }
 
  private:
   /**

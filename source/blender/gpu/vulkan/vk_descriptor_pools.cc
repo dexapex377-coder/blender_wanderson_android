@@ -12,6 +12,7 @@
 #include "vk_context.hh"
 #include "vk_descriptor_pools.hh"
 #include "vk_device.hh"
+#include "vk_pipeline_diag.hh"
 #include "vk_state_manager.hh"
 
 namespace blender::gpu {
@@ -43,6 +44,9 @@ void VKDescriptorPools::ensure_pool(const VKDevice &device)
   std::scoped_lock lock(mutex_);
   if (!recycled_pools_.is_empty()) {
     vk_descriptor_pool_ = recycled_pools_.pop_last();
+    vk_pipeline_diag_logf("DESCPOOL reuse recycled=0x%zX remaining=%zu",
+                          (size_t)vk_descriptor_pool_,
+                          recycled_pools_.size());
     return;
   }
 
@@ -64,20 +68,29 @@ void VKDescriptorPools::ensure_pool(const VKDevice &device)
   pool_info.pPoolSizes = pool_sizes.data();
   device.functions.vkCreateDescriptorPool(
       device.vk_handle(), &pool_info, nullptr, &vk_descriptor_pool_);
+  vk_pipeline_diag_logf("DESCPOOL new pool=0x%zX maxSets=%u",
+                        (size_t)vk_descriptor_pool_,
+                        POOL_SIZE_DESCRIPTOR_SETS);
 }
 
 void VKDescriptorPools::discard_active_pool(VKContext &context)
 {
+  vk_pipeline_diag_logf(
+      "DESCPOOL discard pool=0x%zX recycled=%zu", (size_t)vk_descriptor_pool_, recycled_pools_.size());
   context.discard_pool.discard_descriptor_pool_for_reuse(vk_descriptor_pool_, this);
   vk_descriptor_pool_ = VK_NULL_HANDLE;
   /* All descriptor sets of the discarded pool (including the one VKDescriptorSetTracker caches
    * for reuse) become invalid once this pool is recycled and reset by the submission thread.
-   * Force a state refresh so the next draw re-allocates instead of reusing a stale handle. */
+   * Force a state refresh so the next draw re-allocates instead of reusing a stale handle, and
+   * drop the tracker's cached set + pending writes outright (the MTK driver crashes with a
+   * null-deref inside upload_descriptor_sets when writing into a set whose pool was reset). */
   context.state_manager_get().is_dirty = true;
+  context.descriptor_set_get().invalidate();
 }
 
 void VKDescriptorPools::recycle(VkDescriptorPool vk_descriptor_pool)
 {
+  vk_pipeline_diag_logf("DESCPOOL recycle pool=0x%zX", (size_t)vk_descriptor_pool);
   const VKDevice &device = VKBackend::get().device;
   device.functions.vkResetDescriptorPool(device.vk_handle(), vk_descriptor_pool, 0);
   std::scoped_lock lock(mutex_);

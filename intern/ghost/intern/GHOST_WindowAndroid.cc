@@ -127,10 +127,11 @@ void GHOST_WindowAndroid::getClientBounds(GHOST_Rect &bounds) const
 {
   /* ANativeWindow_getWidth/Height report the display size, not the (possibly reduced)
    * buffer size, so apply the same divisor used for the buffer geometry. */
-  const uint32_t divisor = GHOST_android_render_scale_divisor();
-  const int32_t w = native_window_ ? ANativeWindow_getWidth(native_window_) / int32_t(divisor) : 0;
-  const int32_t h = native_window_ ? ANativeWindow_getHeight(native_window_) / int32_t(divisor) :
-                                     0;
+  const float divisor = GHOST_android_render_scale_divisor();
+  const int32_t native_w = native_window_ ? ANativeWindow_getWidth(native_window_) : 0;
+  const int32_t native_h = native_window_ ? ANativeWindow_getHeight(native_window_) : 0;
+  const int32_t w = native_w > 0 ? std::max(1, int32_t(native_w / divisor)) : 0;
+  const int32_t h = native_h > 0 ? std::max(1, int32_t(native_h / divisor)) : 0;
   bounds.set(0, 0, w, h);
 }
 

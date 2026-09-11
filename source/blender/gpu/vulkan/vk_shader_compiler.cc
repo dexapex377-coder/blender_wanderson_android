@@ -16,11 +16,17 @@
 
 #include "vk_backend.hh"
 #include "vk_device.hh"
+#include "vk_pipeline_diag.hh"
 #include "vk_shader.hh"
 #include "vk_shader_compiler.hh"
 
+#include <cstring>
 #include <iostream>
 #include <string>
+
+#ifdef __ANDROID__
+#  include <sys/system_properties.h>
+#endif
 
 #include "CLG_log.h"
 
@@ -42,17 +48,49 @@ static CLG_LogRef LOG = {"gpu.vulkan"};
  * instead. Blender asks for no SPIR-V 1.4 or 1.5 feature, so the older target costs nothing; the
  * workaround right below, which turns the optimizer off for the same drivers, has the same shape.
  */
+#ifndef __ANDROID__
 static bool compile_for_vulkan_11()
 {
-#ifdef __ANDROID__
-  /* Mobile GPU drivers (Adreno, Mali and PowerVR) reject or mishandle SPIR-V >= 1.3/1.4 modules;
-   * compile for Vulkan 1.1 / SPIR-V 1.3 on all Android devices regardless of the reported version. */
-  return true;
-#else
   const uint32_t api_version = VKBackend::get().device.physical_device_properties_get().apiVersion;
   return api_version < VK_API_VERSION_1_2 ||
          GPU_type_matches(GPU_DEVICE_QUALCOMM, GPU_OS_ANY, GPU_DRIVER_ANY);
+}
 #endif
+
+static shaderc_env_version spirv_target_env_get()
+{
+#ifdef __ANDROID__
+  char value[PROP_VALUE_MAX] = {};
+  if (__system_property_get("debug.blender.spirv", value) > 0 && value[0] != '\0') {
+    if (strcmp(value, "vk10") == 0) {
+      return shaderc_env_version_vulkan_1_0;
+    }
+    if (strcmp(value, "vk12") == 0) {
+      return shaderc_env_version_vulkan_1_2;
+    }
+    if (strcmp(value, "vk13") == 0) {
+      return shaderc_env_version_vulkan_1_3;
+    }
+  }
+  return shaderc_env_version_vulkan_1_1;
+#else
+  return compile_for_vulkan_11() ? shaderc_env_version_vulkan_1_1 :
+                                   shaderc_env_version_vulkan_1_2;
+#endif
+}
+
+static const char *spirv_cache_version_str()
+{
+  switch (spirv_target_env_get()) {
+    case shaderc_env_version_vulkan_1_0:
+      return "vk10";
+    case shaderc_env_version_vulkan_1_2:
+      return "vk12";
+    case shaderc_env_version_vulkan_1_3:
+      return "vk13";
+    default:
+      return "vk11";
+  }
 }
 
 static std::optional<std::string> cache_dir_get()
@@ -64,7 +102,7 @@ static std::optional<std::string> cache_dir_get()
 
     /* Version the cache by the target, not by the device: the source hash alone would otherwise
      * reuse SPIR-V compiled for a different SPIR-V version. */
-    const char *ver = compile_for_vulkan_11() ? "vk11" : "vk12";
+    const char *ver = spirv_cache_version_str();
     std::string cache_dir = std::string(tmp_dir_buffer) + "vk-spirv-cache-" + ver + SEP_STR;
     BLI_dir_create_recursive(cache_dir.c_str());
     return cache_dir;
@@ -240,9 +278,7 @@ static bool compile_ex(shaderc::Compiler &compiler,
 
   shaderc::CompileOptions options;
   bool do_optimize = true;
-  const shaderc_env_version env_version = compile_for_vulkan_11() ?
-                                              shaderc_env_version_vulkan_1_1 :
-                                              shaderc_env_version_vulkan_1_2;
+  const shaderc_env_version env_version = spirv_target_env_get();
   options.SetTargetEnvironment(shaderc_target_env_vulkan, env_version);
   if (G.debug & G_DEBUG_GPU_RENDERDOC) {
     do_optimize = false;
@@ -288,6 +324,17 @@ static bool compile_ex(shaderc::Compiler &compiler,
   if (compilation_succeeded) {
     write_spirv_to_disk(shader_module);
   }
+
+  vk_pipeline_diag_logf(
+      "MODULE %s | stage=%s | spirv-target=%s | hash=%s | status=%s | size=%zu",
+      shader.name_get().c_str(),
+      to_stage_name(stage).data(),
+      spirv_cache_version_str(),
+      shader_module.sources_hash.c_str(),
+      compilation_succeeded ? "OK" : shader_module.compilation_result.GetErrorMessage().c_str(),
+      compilation_succeeded ? size_t(shader_module.compilation_result.end() -
+                                     shader_module.compilation_result.begin()) :
+                              0);
   return compilation_succeeded;
 }
 
@@ -295,6 +342,12 @@ bool VKShaderCompiler::compile_module(VKShader &shader,
                                       shaderc_shader_kind stage,
                                       VKShaderModule &shader_module)
 {
+  static bool target_logged = []() {
+    vk_pipeline_diag_logf("SPIRV-TARGET=%s (debug.blender.spirv override)",
+                          spirv_cache_version_str());
+    return true;
+  }();
+  (void)target_logged;
   shaderc::Compiler compiler;
   return compile_ex(compiler, shader, stage, shader_module);
 }
