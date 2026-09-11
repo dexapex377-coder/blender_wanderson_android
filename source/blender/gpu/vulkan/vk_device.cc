@@ -229,6 +229,9 @@ void VKDevice::init_physical_device_properties()
   vk_physical_device_id_properties_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
   vk_physical_device_properties.pNext = &vk_physical_device_driver_properties_;
   vk_physical_device_driver_properties_.pNext = &vk_physical_device_id_properties_;
+  vk_physical_device_subgroup_properties_.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+  vk_physical_device_id_properties_.pNext = &vk_physical_device_subgroup_properties_;
 
   if (supports_extension(VK_KHR_MAINTENANCE_4_EXTENSION_NAME)) {
     vk_physical_device_maintenance4_properties_.pNext = vk_physical_device_properties.pNext;
@@ -273,7 +276,7 @@ void VKDevice::init_physical_device_properties()
       limits.maxComputeWorkGroupCount[1],
       limits.maxComputeWorkGroupCount[2],
       limits.maxComputeSharedMemorySize,
-      limits.subgroupSize,
+      vk_physical_device_subgroup_properties_.subgroupSize,
       size_t(limits.maxStorageBufferRange));
 
   /* Storage image format support: log which render-target formats accept write access, as a
@@ -293,7 +296,7 @@ void VKDevice::init_physical_device_properties()
       VK_FORMAT_R32_SFLOAT,
       VK_FORMAT_R16_SFLOAT,
       VK_FORMAT_R16G16_SFLOAT,
-      VK_FORMAT_R11G11B10_UFLOAT,
+      VK_FORMAT_R11G11B10_UFLOAT_PACK32,
       VK_FORMAT_B8G8R8A8_UNORM,
       VK_FORMAT_R16G16B16A16_USCALED,
   };

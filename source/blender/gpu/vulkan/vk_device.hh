@@ -236,6 +236,7 @@ class VKDevice : public NonCopyable {
   VkPhysicalDeviceProperties vk_physical_device_properties_ = {};
   VkPhysicalDeviceDriverProperties vk_physical_device_driver_properties_ = {};
   VkPhysicalDeviceIDProperties vk_physical_device_id_properties_ = {};
+  VkPhysicalDeviceSubgroupProperties vk_physical_device_subgroup_properties_ = {};
   VkPhysicalDeviceMemoryProperties vk_physical_device_memory_properties_ = {};
   VkPhysicalDeviceMaintenance4Properties vk_physical_device_maintenance4_properties_ = {
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES};
