@@ -15,6 +15,7 @@
 #include "vk_backend.hh"
 #include "vk_context.hh"
 #include "vk_device.hh"
+#include "vk_pipeline_diag.hh"
 #include "vk_state_manager.hh"
 #include "vk_storage_buffer.hh"
 #include "vk_texture.hh"
@@ -248,6 +249,74 @@ void VKDevice::init_physical_device_properties()
 
   vkGetPhysicalDeviceProperties2(vk_physical_device_, &vk_physical_device_properties);
   vk_physical_device_properties_ = vk_physical_device_properties.properties;
+
+  const VkPhysicalDeviceLimits &limits = vk_physical_device_properties_.limits;
+  vk_pipeline_diag_logf(
+      "DEVICE %s | vendor=0x%x | device=0x%x | driver=0x%x | api=%u.%u.%u | name=%s",
+      vk_physical_device_driver_properties_.driverName,
+      vk_physical_device_properties_.vendorID,
+      vk_physical_device_properties_.deviceID,
+      vk_physical_device_properties_.driverVersion,
+      VK_VERSION_MAJOR(vk_physical_device_properties_.apiVersion),
+      VK_VERSION_MINOR(vk_physical_device_properties_.apiVersion),
+      VK_VERSION_PATCH(vk_physical_device_properties_.apiVersion),
+      vk_physical_device_properties_.deviceName);
+  vk_pipeline_diag_logf(
+      "DEVICE-LIMITS | maxComputeWorkGroupInvocations=%u | maxComputeWorkGroupSize=(%u,%u,%u) | "
+      "maxComputeWorkGroupCount=(%u,%u,%u) | maxComputeSharedMemorySize=%u | "
+      "subgroupSize=%u | maxStorageBufferRange=%zu",
+      limits.maxComputeWorkGroupInvocations,
+      limits.maxComputeWorkGroupSize[0],
+      limits.maxComputeWorkGroupSize[1],
+      limits.maxComputeWorkGroupSize[2],
+      limits.maxComputeWorkGroupCount[0],
+      limits.maxComputeWorkGroupCount[1],
+      limits.maxComputeWorkGroupCount[2],
+      limits.maxComputeSharedMemorySize,
+      limits.subgroupSize,
+      size_t(limits.maxStorageBufferRange));
+
+  /* Storage image format support: log which render-target formats accept write access, as a
+   * missing STORAGE_IMAGE_BIT on a format EEVEE uses for compute image stores is a classic
+   * PowerVR "VK_ERROR_UNKNOWN on why no crash tells you nothing" failure. */
+  const VkFormat formats_to_check[] = {
+      VK_FORMAT_R8G8B8A8_UNORM,
+      VK_FORMAT_R8G8B8A8_SNORM,
+      VK_FORMAT_R16G16B16A16_SFLOAT,
+      VK_FORMAT_R16G16B16A16_UNORM,
+      VK_FORMAT_R32G32B32A32_SFLOAT,
+      VK_FORMAT_R32G32B32A32_UINT,
+      VK_FORMAT_R32G32B32_UINT,
+      VK_FORMAT_R32G32B32_SFLOAT,
+      VK_FORMAT_R32G32_SFLOAT,
+      VK_FORMAT_R32G32_UINT,
+      VK_FORMAT_R32_SFLOAT,
+      VK_FORMAT_R16_SFLOAT,
+      VK_FORMAT_R16G16_SFLOAT,
+      VK_FORMAT_R11G11B10_UFLOAT,
+      VK_FORMAT_B8G8R8A8_UNORM,
+      VK_FORMAT_R16G16B16A16_USCALED,
+  };
+  char format_log[1024];
+  size_t format_log_len = 0;
+  for (VkFormat vk_format : formats_to_check) {
+    VkFormatProperties props;
+    vkGetPhysicalDeviceFormatProperties(vk_physical_device_, vk_format, &props);
+    const bool storage = (props.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
+    const bool storage_aa = (props.optimalTilingFeatures &
+                             VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT) != 0;
+    const bool sampled = (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0;
+    const bool depth = (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+    format_log_len += snprintf(format_log + format_log_len,
+                               sizeof(format_log) - format_log_len,
+                               "%s|%s%s%s%s ",
+                               to_gpu_format_string(vk_format).c_str(),
+                               storage ? "S" : "-",
+                               storage_aa ? "s" : "-",
+                               sampled ? "I" : "-",
+                               depth ? "D" : "-");
+  }
+  vk_pipeline_diag_logf("DEVICE-FORMATS | %s", format_log);
 }
 
 void VKDevice::init_physical_device_memory_properties()

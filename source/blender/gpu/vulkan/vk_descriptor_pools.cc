@@ -112,6 +112,13 @@ VkDescriptorSet VKDescriptorPools::allocate(const VkDescriptorSetLayout descript
   VkResult result = device.functions.vkAllocateDescriptorSets(
       device.vk_handle(), &allocate_info, &vk_descriptor_set);
 
+  if (result != VK_SUCCESS) {
+    vk_pipeline_diag_logf("DESCPOOL alloc result=%s | pool=0x%zX | set=0x%zX",
+                          to_string(result),
+                          size_t(vk_descriptor_pool_),
+                          size_t(vk_descriptor_set));
+  }
+
   if (ELEM(result, VK_ERROR_OUT_OF_POOL_MEMORY, VK_ERROR_FRAGMENTED_POOL)) {
     {
       VKContext &context = *VKContext::get();
@@ -119,6 +126,12 @@ VkDescriptorSet VKDescriptorPools::allocate(const VkDescriptorSetLayout descript
       ensure_pool(device);
     }
     return allocate(descriptor_set_layout);
+  }
+
+  if (result != VK_SUCCESS && vk_descriptor_set == VK_NULL_HANDLE) {
+    vk_pipeline_diag_logf("DESCPOOL alloc FAILED non-recoverable %s (will be recorded as "
+                          "VK_NULL_HANDLE in the render graph)",
+                          to_string(result));
   }
 
   return vk_descriptor_set;

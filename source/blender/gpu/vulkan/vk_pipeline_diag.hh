@@ -64,4 +64,40 @@ inline void vk_pipeline_diag_logf(const char *fmt, ...)
   vk_pipeline_diag_log_line(buf);
 }
 
+/**
+ * Parse an optimized SPIR-V binary for the OpExecutionMode LocalSize (17) of the main entry
+ * point. Used to log the workgroup size that the device will actually need to launch, since a
+ * compute pipeline can fail with VK_ERROR_UNKNOWN when the requested local size exceeds the
+ * device limits (a classic PowerVR failure mode).
+ */
+inline bool vk_pipeline_diag_spirv_local_size(const uint32_t *words,
+                                              size_t word_count,
+                                              uint32_t r_local_size[3])
+{
+  /* SPIR-V header is 5 words: magic, version, generator, bound, schema. */
+  if (word_count < 6) {
+    return false;
+  }
+  size_t offset = 5;
+  while (offset < word_count) {
+    const uint32_t instruction = words[offset];
+    const uint32_t opcode = instruction & 0xFFFFu;
+    const uint32_t word_count_inst = instruction >> 16;
+    const size_t next = offset + word_count_inst;
+    if (next > word_count || word_count_inst == 0) {
+      return false;
+    }
+    /* OpExecutionMode = 0x10. Layout: [opcode, entrypoint id, mode, ...args]. */
+    if (opcode == 0x10 && word_count_inst >= 4 && words[offset + 2] == 17) {
+      /* LocalSize mode: [x, y, z] follow the mode literal. */
+      r_local_size[0] = words[offset + 3];
+      r_local_size[1] = words[offset + 4];
+      r_local_size[2] = (word_count_inst >= 6) ? words[offset + 5] : 1;
+      return true;
+    }
+    offset = next;
+  }
+  return false;
+}
+
 }  // namespace blender::gpu

@@ -215,13 +215,22 @@ VkPipeline VKPipelineMap<VKComputeInfo>::create(const VKComputeInfo &compute_inf
                vk_pipeline_base == VK_NULL_HANDLE ? "no" : "yes",
                vk_pipeline_cache == VK_NULL_HANDLE ? "no" : "yes");
 
-    vk_pipeline_diag_logf(
-        "COMPUTE FAIL %s | result=%s | spec=%zu | base=%s | cache=%s",
-        name.c_str(),
-        to_string(result),
-        compute_info.specialization_constants.size(),
-        vk_pipeline_base == VK_NULL_HANDLE ? "no" : "yes",
-        vk_pipeline_cache == VK_NULL_HANDLE ? "no" : "yes");
+    {
+      const VkPhysicalDeviceLimits &limits = device.physical_device_properties_get().limits;
+      vk_pipeline_diag_logf(
+          "COMPUTE FAIL %s | result=%s | spec=%zu | base=%s | cache=%s | "
+          "maxWGI=%u | maxWGS=(%u,%u,%u) | layout=0x%zX",
+          name.c_str(),
+          to_string(result),
+          compute_info.specialization_constants.size(),
+          vk_pipeline_base == VK_NULL_HANDLE ? "no" : "yes",
+          vk_pipeline_cache == VK_NULL_HANDLE ? "no" : "yes",
+          limits.maxComputeWorkGroupInvocations,
+          limits.maxComputeWorkGroupSize[0],
+          limits.maxComputeWorkGroupSize[1],
+          limits.maxComputeWorkGroupSize[2],
+          size_t(compute_info.vk_pipeline_layout));
+    }
 
     /* Qualcomm's Adreno driver answers VK_ERROR_UNKNOWN for compute pipelines that every desktop
      * driver accepts, and the message carries no reason. Narrow it down by retrying with one

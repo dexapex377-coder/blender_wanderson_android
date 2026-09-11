@@ -8,6 +8,9 @@
 
 #include "DNA_userdef_types.h"
 
+#include <atomic>
+#include <sstream>
+
 #include "GPU_debug.hh"
 
 #include "gpu_capabilities_private.hh"
@@ -17,6 +20,7 @@
 #include "vk_debug.hh"
 #include "vk_framebuffer.hh"
 #include "vk_immediate.hh"
+#include "vk_pipeline_diag.hh"
 #include "vk_shader.hh"
 #include "vk_shader_interface.hh"
 #include "vk_state_manager.hh"
@@ -49,6 +53,7 @@ VKContext::VKContext(GHOST_IWindow *ghost_window, GHOST_IContext *ghost_context)
 
 VKContext::~VKContext()
 {
+  vk_pipeline_diag_logf("CONTEXT %p destroy", (void *)this);
   if (surface_texture_) {
     back_left->attachment_remove(GPU_FB_COLOR_ATTACHMENT0);
     front_left->attachment_remove(GPU_FB_COLOR_ATTACHMENT0);
@@ -77,6 +82,15 @@ void VKContext::sync_backbuffer()
                                    vk_extent_.width != swap_chain_data.extent.width ||
                                    vk_extent_.height != swap_chain_data.extent.height;
     if (reset_framebuffer) {
+      vk_pipeline_diag_logf(
+          "CONTEXT sync_backbuffer RESET | format=%s->%s | extent=%ux%u->%ux%u | ctx=%p",
+          to_gpu_format_string(swap_chain_format_.format).c_str(),
+          to_gpu_format_string(swap_chain_data.surface_format.format).c_str(),
+          vk_extent_.width,
+          vk_extent_.height,
+          swap_chain_data.extent.width,
+          swap_chain_data.extent.height,
+          (void *)this);
       if (has_active_framebuffer()) {
         deactivate_framebuffer();
       }
@@ -114,6 +128,16 @@ void VKContext::sync_backbuffer()
 
 void VKContext::activate()
 {
+  static std::atomic<int> context_counter = 0;
+  static std::atomic<const void *> last_activated = nullptr;
+  const void *prev = last_activated.exchange(this);
+  if (prev != this) {
+    vk_pipeline_diag_logf("CONTEXT %p activate | prev=%p | n=%d",
+                          (void *)this,
+                          prev,
+                          context_counter.fetch_add(1));
+  }
+
   /* Make sure no other context is already bound to this thread. */
   BLI_assert(is_active_ == false);
   /* Make sure the active GHOST context matches the one this GPU Context was created for. */
@@ -145,6 +169,7 @@ void VKContext::activate()
 
 void VKContext::deactivate()
 {
+  vk_pipeline_diag_logf("CONTEXT %p deactivate", (void *)this);
   flush_render_graph(RenderGraphFlushFlags(0));
   immDeactivate();
   thread_data_.reset();
@@ -180,6 +205,21 @@ TimelineValue VKContext::flush_render_graph(RenderGraphFlushFlags flags,
   }
   VKDevice &device = VKBackend::get().device;
   push_constants_pool.ensure_uploaded();
+
+  static int flush_counter = 0;
+  if ((flush_counter++ % 120) == 0) {
+    std::stringstream group_stack;
+    for (const StringRef &group : debug_stack) {
+      const std::string str_group = group;
+      group_stack << "/" << str_group;
+    }
+    vk_pipeline_diag_logf("RG-SUBMIT #%d | submit=%d | groups='%s' | ctx=%p",
+                          flush_counter,
+                          bool(flags & RenderGraphFlushFlags::SUBMIT),
+                          group_stack.str().empty() ? "-" : group_stack.str().c_str(),
+                          (void *)this);
+  }
+
   push_constants_pool.discard();
   descriptor_set_get().upload_descriptor_sets();
   TimelineValue timeline = device.render_graph_submit(

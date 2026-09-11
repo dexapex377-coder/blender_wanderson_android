@@ -1090,6 +1090,18 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
    * The next frame window manager will detect that the window is minimized and doesn't draw the
    * window at all.
    */
+#ifdef __ANDROID__
+  static int acquire_counter = 0;
+  if ((acquire_counter++ % 240) == 0) {
+    __android_log_print(ANDROID_LOG_INFO,
+                        "blender-pipe-diag",
+                        "GHOST swapBufferAcquire #%d | swapchain=%s | ctx=%p",
+                        acquire_counter,
+                        swapchain_ == VK_NULL_HANDLE ? "none" : "ok",
+                        (void *)this);
+  }
+#endif
+
   if (swap_buffer_acquired_callback_) {
     swap_buffer_acquired_callback_();
   }

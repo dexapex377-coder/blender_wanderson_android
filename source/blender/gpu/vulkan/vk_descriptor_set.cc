@@ -571,6 +571,16 @@ void VKDescriptorSetPoolUpdator::allocate_new_descriptor_set(
 {
   /* Use descriptor pools/sets. */
   vk_descriptor_set = context.descriptor_pools_get().allocate(vk_descriptor_set_layout);
+  if (vk_descriptor_set == VK_NULL_HANDLE) {
+    /* Log before the (release-NDEBUG no-op) assert; this is the moment a failed allocate leaves
+     * a NULL descriptor set recorded inside the render graph, which the MTK driver later
+     * null-derefs while building command groups. The shader/pass name is the only breadcrumb
+     * we have at this point for what was being built. */
+    vk_pipeline_diag_logf(
+        "DESCSET allocate returned VK_NULL_HANDLE | shader=%s | layout=0x%zX",
+        shader.name_get().c_str(),
+        size_t(vk_descriptor_set_layout));
+  }
   BLI_assert(vk_descriptor_set != VK_NULL_HANDLE);
   debug::object_label(vk_descriptor_set, shader.name_get());
   r_pipeline_data.vk_descriptor_set = vk_descriptor_set;

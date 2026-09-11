@@ -1676,6 +1676,7 @@ void wm_window_make_drawable(wmWindowManager *wm, wmWindow *win)
 
 void wm_window_reset_drawable()
 {
+  static int reset_counter = 0;
   BLI_assert(BLI_thread_is_main());
   BLI_assert(GPU_framebuffer_active_get() == GPU_framebuffer_back_get());
   wmWindowManager *wm = static_cast<wmWindowManager *>(G_MAIN->wm.first);
@@ -1686,6 +1687,12 @@ void wm_window_reset_drawable()
   wmWindow *win = wm->runtime->windrawable;
 
   if (win && win->runtime->ghostwin) {
+    if ((reset_counter++ % 300) == 0) {
+      CLOG_INFO_NOCHECK(WM_LOG_EVENTS,
+                        "wm_window_reset_drawable #%d | win=%p",
+                        reset_counter,
+                        (void *)win);
+    }
     wm_window_clear_drawable(wm);
     wm_window_set_drawable(wm, win, true);
   }

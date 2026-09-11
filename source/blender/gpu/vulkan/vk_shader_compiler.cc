@@ -335,6 +335,28 @@ static bool compile_ex(shaderc::Compiler &compiler,
       compilation_succeeded ? size_t(shader_module.compilation_result.end() -
                                      shader_module.compilation_result.begin()) :
                               0);
+
+  if (compilation_succeeded && stage == shaderc_compute_shader) {
+    uint32_t local_size[3] = {0, 0, 0};
+    if (vk_pipeline_diag_spirv_local_size(shader_module.compilation_result.begin(),
+                                          size_t(shader_module.compilation_result.end() -
+                                                 shader_module.compilation_result.begin()),
+                                          local_size))
+    {
+      const VkPhysicalDeviceLimits &limits = VKBackend::get().device.physical_device_properties_get()
+                                                 .limits;
+      vk_pipeline_diag_logf(
+          "MODULE-LOCALSIZE %s | local=(%u,%u,%u) | maxWGI=%u | maxWGS=(%u,%u,%u)",
+          shader.name_get().c_str(),
+          local_size[0],
+          local_size[1],
+          local_size[2],
+          limits.maxComputeWorkGroupInvocations,
+          limits.maxComputeWorkGroupSize[0],
+          limits.maxComputeWorkGroupSize[1],
+          limits.maxComputeWorkGroupSize[2]);
+    }
+  }
   return compilation_succeeded;
 }
 

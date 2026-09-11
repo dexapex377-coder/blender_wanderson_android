@@ -9,6 +9,7 @@
 #include "vk_command_builder.hh"
 #include "BLI_index_range.hh"
 #include "vk_backend.hh"
+#include "vk_pipeline_diag.hh"
 #include "vk_render_graph.hh"
 #include "vk_to_string.hh"
 
@@ -393,11 +394,25 @@ void VKCommandBuilder::groups_build_commands(VKRenderGraph &render_graph,
     }
 
     /* Record group node commands. */
+    static int rg_node_counter = 0;
     for (NodeHandle node_handle : group_node_handles) {
       VKRenderGraphNode &node = render_graph.nodes_[node_handle];
 
       if (G.debug & G_DEBUG_GPU) {
         activate_debug_group(render_graph, command_buffer, debug_groups, node_handle);
+      }
+
+      /* Rate-limited rendering-graph telemetry: log which node types run and the debug group
+       * (EEVEE pass) they belong to. This is what answers "which EEVEE pass was submitting when
+       * the frame went black / the device crashed". */
+      if ((rg_node_counter++ % 64) == 0) {
+        std::string debug_group = render_graph.full_debug_group(node_handle);
+        std::stringstream node_type;
+        node_type << node.type;
+        vk_pipeline_diag_logf("RG-NODE #%d | type=%s | group='%s'",
+                              rg_node_counter,
+                              node_type.str().c_str(),
+                              debug_group.empty() ? "-" : debug_group.c_str());
       }
 
       if (node.type == VKNodeType::BEGIN_RENDERING) {

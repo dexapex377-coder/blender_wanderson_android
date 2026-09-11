@@ -8,8 +8,9 @@
 
 #include "vk_resource_pool.hh"
 #include "vk_backend.hh"
-#include "vk_device.hh"
 #include "vk_context.hh"
+#include "vk_device.hh"
+#include "vk_pipeline_diag.hh"
 
 namespace blender::gpu {
 
@@ -126,6 +127,13 @@ void VKDiscardPool::discard_acceleration_structure(
 void VKDiscardPool::destroy_discarded_resources(VKDevice &device, TimelineValue current_timeline)
 {
   std::scoped_lock mutex(mutex_);
+
+  static int destroy_counter = 0;
+  if ((destroy_counter++ % 900) == 0) {
+    vk_pipeline_diag_logf("DISCARD-POOL destroy #%d | tl=%llu",
+                          destroy_counter,
+                          (unsigned long long)current_timeline);
+  }
 
   swapchain_images_.remove_old(current_timeline,
                                [&](VkImage vk_image) { device.resources.remove_image(vk_image); });
