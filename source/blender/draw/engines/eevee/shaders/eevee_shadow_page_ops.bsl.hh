@@ -7,6 +7,10 @@
 #include "eevee_shadow_shared.hh"
 
 #define max_page uint(SHADOW_MAX_PAGE)
+/* SHADOW_MAX_PAGE is a power of two, so modulo is a bitwise AND. Some mobile drivers (e.g.
+ * PowerVR BXM) refuse to compile the OpUMod instruction with a constant divisor in this shader
+ * (fails at vkCreateComputePipelines with VK_ERROR_UNKNOWN). */
+#define page_mask uint(SHADOW_MAX_PAGE - 1)
 
 namespace eevee::shadow {
 
@@ -78,7 +82,7 @@ struct PageAllocator {
     assert(tile.is_allocated);
 
     /* The page_cached_next is also wrapped in the defragment phase to avoid unsigned overflow. */
-    uint index = atomicAdd(pages_infos_buf.page_cached_next, 1u) % uint(SHADOW_MAX_PAGE);
+    uint index = atomicAdd(pages_infos_buf.page_cached_next, 1u) & page_mask;
     /* Insert in heap. */
     pages_cached_buf[index] = uint2(shadow_page_pack(tile.page), tile_index);
     /* Remove from tile. */
@@ -124,7 +128,7 @@ struct PageAllocator {
   void find_first_valid(uint &src, uint dst)
   {
     for (uint i = src; i < dst; i++) {
-      if (pages_cached_buf[i % max_page].x != uint(-1)) {
+      if (pages_cached_buf[i & page_mask].x != uint(-1)) {
         src = i;
         return;
       }
@@ -180,7 +184,7 @@ struct PageAllocator {
     /* First free as much pages as needed from the end of the cached range to fulfill the
      * allocation. Avoid defragmenting to then free them. */
     for (; additional_pages > 0 && src < end; additional_pages--) {
-      free_cached_page(src % max_page);
+      free_cached_page(src & page_mask);
       find_first_valid(src, end);
     }
 
@@ -191,14 +195,14 @@ struct PageAllocator {
        * Decrement by one to refer to the first slot we can defragment. */
       for (uint dst = end - 1; dst > src; dst--) {
         /* Find hole. */
-        if (pages_cached_buf[dst % max_page].x != uint(-1)) {
+        if (pages_cached_buf[dst & page_mask].x != uint(-1)) {
           continue;
         }
         /* Update corresponding reference in tile. */
-        page_cache_update_page_ref(src % max_page, dst % max_page);
+        page_cache_update_page_ref(src & page_mask, dst & page_mask);
         /* Move page. */
-        pages_cached_buf[dst % max_page] = pages_cached_buf[src % max_page];
-        pages_cached_buf[src % max_page] = uint2(~0u);
+        pages_cached_buf[dst & page_mask] = pages_cached_buf[src & page_mask];
+        pages_cached_buf[src & page_mask] = uint2(~0u);
 
         find_first_valid(src, dst);
       }
@@ -207,7 +211,7 @@ struct PageAllocator {
     end = pages_infos_buf.page_cached_next;
     /* Free pages in the "new" range (these are compact). */
     for (; additional_pages > 0 && src < end; additional_pages--, src++) {
-      free_cached_page(src % max_page);
+      free_cached_page(src & page_mask);
     }
 
 #if 0 /* Debug */
@@ -231,5 +235,6 @@ struct PageAllocator {
 };
 
 #undef max_page
+#undef page_mask
 
 }  // namespace eevee::shadow
