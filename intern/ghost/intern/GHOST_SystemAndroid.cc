@@ -37,6 +37,14 @@
 
 static android_app *g_android_app = nullptr;
 
+/* Set from Blender's user preferences (UserDef::android_render_scale), see
+ * GHOST_AndroidMemoryTier.hh. C linkage so the WindowManager can declare and
+ * call it across the GHOST/WM boundary (wm_window.cc) by unmangled name. */
+extern "C" void GHOST_android_set_render_scale_divisor(float divisor)
+{
+  GHOST_android_render_scale_divisor_ref() = divisor > 0.0f ? divisor : 1.0f;
+}
+
 /* Hold a finger this long without moving to get a right-click. */
 static constexpr uint64_t TOUCH_LONG_PRESS_MS = 500;
 /* Movement past this (in pixels) makes the press a left-button drag. Sized for a

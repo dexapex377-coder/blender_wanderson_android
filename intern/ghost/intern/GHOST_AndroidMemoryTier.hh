@@ -55,12 +55,6 @@ inline float &GHOST_android_render_scale_divisor_ref()
   return divisor;
 }
 
-/** Set from Blender's user preferences (UserDef::android_render_scale). */
-inline void GHOST_android_set_render_scale_divisor(float divisor)
-{
-  GHOST_android_render_scale_divisor_ref() = divisor > 0.0f ? divisor : 1.0f;
-}
-
 inline float GHOST_android_render_scale_divisor()
 {
   static const float sysprop = []() -> float {

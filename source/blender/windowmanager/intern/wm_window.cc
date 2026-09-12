@@ -742,7 +742,7 @@ void WM_window_dpi_set_userdef(const wmWindow *win)
 {
 #ifdef __ANDROID__
   /* Push Android render scale divisor to GHOST (used for the window render scale). */
-  extern void GHOST_android_set_render_scale_divisor(float divisor);
+  extern "C" void GHOST_android_set_render_scale_divisor(float divisor);
   GHOST_android_set_render_scale_divisor(U.android_render_scale);
 #endif
 
@@ -1050,7 +1050,7 @@ static void wm_window_ghostwindow_add(wmWindowManager *wm,
 #ifdef __ANDROID__
   /* Push Android render scale divisor to GHOST before creating the window so the
    * first window already renders at the user-selected scale. */
-  extern void GHOST_android_set_render_scale_divisor(float divisor);
+  extern "C" void GHOST_android_set_render_scale_divisor(float divisor);
   GHOST_android_set_render_scale_divisor(U.android_render_scale);
 #endif
   GHOST_IWindow *ghost_window = g_system->createWindow(
