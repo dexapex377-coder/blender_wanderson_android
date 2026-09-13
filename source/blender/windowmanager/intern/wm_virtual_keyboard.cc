@@ -117,6 +117,8 @@ enum class VKKind {
   GridMove,
   /** Grid: the small ✕ that closes the grid and hands input back to the viewport. */
   GridClose,
+  /** Grid: delete mode, which turns every tile into a ✕ that removes that shortcut. */
+  GridDelete,
   /** Editor: the named slot buttons, `code` 0..3. */
   EditSlot,
   /** Editor: the Hold toggle. */
@@ -431,6 +433,9 @@ struct VKShortcut {
 /** How many tiles the grid holds before refusing new ones. */
 static const int VK_GRID_LIMIT = 32;
 
+/** Shortcuts shown at once before the grid starts to scroll (3 rows of 4). */
+static const int VK_GRID_VISIBLE = 12;
+
 struct VirtualKeyboard {
   bool open = false;
   wmWindow *win = nullptr;
@@ -516,6 +521,16 @@ struct VirtualKeyboard {
   /** Grid panel, window coordinates. */
   rcti grid_rect = {0, 0, 0, 0};
   bool grid_placed = false;
+  /** How many shortcuts the grid has scrolled past, when there are more than fit at once. */
+  int grid_scroll = 0;
+  /** Scroll value latched when a scroll started, so the drag is a delta, not an absolute. */
+  int grid_scroll_base = 0;
+  /** Y of the finger where a grid press began, for measuring the scroll drag. */
+  int grid_down_y = 0;
+  /** Delete mode: true tiles a ✕ and waits for a shortcut to remove. */
+  bool grid_delete_mode = false;
+  /** True while a vertical drag on the grid is scrolling the tiles, not pressing one. */
+  bool grid_scrolling = false;
 
   /** The overlay's interactive controls, rebuilt whenever the overlay re-lays out. */
   struct UIKey {
@@ -553,6 +568,7 @@ static void vk_editor_key(VirtualKeyboard &vk,
 static void vk_overlay_draw(const wmWindow *win);
 static void vk_overlay_place(VirtualKeyboard &vk, const wmWindow *win);
 static void vk_release_held_shortcuts(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win);
+static void vk_shortcut_remove(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win, int index);
 static void vk_shortcuts_ensure_loaded(VirtualKeyboard &vk);
 
 /** The interface resolution scale, which the keyboard sizes its text and its bar against. */
@@ -1819,7 +1835,8 @@ static int vk_ui_key_at(const VirtualKeyboard &vk, const int xy[2])
   return -1;
 }
 
-/** Lay the shortcuts out as a movable panel: handle, a tile per shortcut, then the "+". */
+/** Lay the shortcuts out as a movable panel: a bar up top, then a page of tiles growing downward,
+ *  the "+" ending the page, and the rest waiting behind a vertical drag. */
 static void vk_grid_place(VirtualKeyboard &vk, const wmWindow *win)
 {
   const float scale = vk_scale();
@@ -1828,19 +1845,29 @@ static void vk_grid_place(VirtualKeyboard &vk, const wmWindow *win)
   const int bar_h = int(26.0f * scale);
   const int tile = int(74.0f * scale);
   constexpr int cols = 4;
-  const int count = int(vk.shortcuts.size()) + 1;
-  const int rows = (count + cols - 1) / cols;
+
+  const int total = int(vk.shortcuts.size());
+  vk.grid_scroll = clamp_i(vk.grid_scroll, 0, max_ii(0, total - VK_GRID_VISIBLE));
+  const int visible = min_ii(total - vk.grid_scroll, VK_GRID_VISIBLE);
+  const int cells = visible + 1; /* +1: the "+" tile that ends the page. */
+  const int rows = (cells + cols - 1) / cols;
   const int panel_w = pad * 2 + cols * tile + (cols - 1) * gap;
-  const int panel_h = pad * 2 + bar_h + rows * tile + (rows - 1) * gap;
+  /* Bar at the top, then the tile rows spilling down, then the bottom pad. */
+  const int panel_h = pad + bar_h + gap + rows * tile + (rows - 1) * gap + pad;
 
   if (!vk.grid_placed) {
     int band_bottom, band_top;
     vk_drawable_band(win, &band_bottom, &band_top);
     vk.grid_rect.xmin = (win->sizex - panel_w) / 2;
     vk.grid_rect.xmax = vk.grid_rect.xmin + panel_w;
-    /* First placement sits it just above the status bar, out of the way of the ball. */
-    vk.grid_rect.ymin = band_bottom + int(12.0f * scale);
-    vk.grid_rect.ymax = vk.grid_rect.ymin + panel_h;
+    /* First placement hangs it from the top of the drawable band and lets it grow downward,
+     * the way a phone expects a panel whose content accumulates below. */
+    vk.grid_rect.ymax = band_top - int(12.0f * scale);
+    vk.grid_rect.ymin = vk.grid_rect.ymax - panel_h;
+    if (vk.grid_rect.ymin < band_bottom) {
+      vk.grid_rect.ymin = band_bottom;
+      vk.grid_rect.ymax = vk.grid_rect.ymin + panel_h;
+    }
     vk.grid_placed = true;
   }
   else {
@@ -1851,6 +1878,9 @@ static void vk_grid_place(VirtualKeyboard &vk, const wmWindow *win)
     vk.grid_rect.ymax = vk.grid_rect.ymin + panel_h;
   }
 
+  /* The bar sits at the top of the panel now. */
+  const int bar_y = vk.grid_rect.ymax - pad - bar_h;
+
   vk.ui_keys.clear();
   {
     VirtualKeyboard::UIKey key;
@@ -1858,32 +1888,45 @@ static void vk_grid_place(VirtualKeyboard &vk, const wmWindow *win)
     key.code = 0;
     key.rect.xmin = vk.grid_rect.xmin + pad;
     key.rect.xmax = key.rect.xmin + bar_h;
-    key.rect.ymin = vk.grid_rect.ymin + pad;
-    key.rect.ymax = key.rect.ymin + bar_h;
+    key.rect.ymin = bar_y;
+    key.rect.ymax = bar_y + bar_h;
+    vk.ui_keys.append(key);
+  }
+  {
+    /* Delete, just left of the ✕: toggles delete mode. */
+    VirtualKeyboard::UIKey key;
+    key.kind = VKKind::GridDelete;
+    key.code = 1;
+    key.rect.xmax = vk.grid_rect.xmax - pad - bar_h - gap;
+    key.rect.xmin = key.rect.xmax - bar_h;
+    key.rect.ymin = bar_y;
+    key.rect.ymax = bar_y + bar_h;
     vk.ui_keys.append(key);
   }
   {
     /* The ✕ that closes the grid, up against the same bar. */
     VirtualKeyboard::UIKey key;
     key.kind = VKKind::GridClose;
-    key.code = 1;
+    key.code = 2;
     key.rect.xmin = vk.grid_rect.xmax - pad - bar_h;
     key.rect.xmax = key.rect.xmin + bar_h;
-    key.rect.ymin = vk.grid_rect.ymin + pad;
-    key.rect.ymax = key.rect.ymin + bar_h;
+    key.rect.ymin = bar_y;
+    key.rect.ymax = bar_y + bar_h;
     vk.ui_keys.append(key);
   }
-  for (int i = 0; i < count; i++) {
+  /* The tile rows run down from below the bar; the "+" is the last cell, at the bottom. */
+  const int tile_top = bar_y - gap;
+  for (int i = 0; i < cells; i++) {
     const int col = i % cols;
     const int row = i / cols;
     VirtualKeyboard::UIKey key;
     key.rect.xmin = vk.grid_rect.xmin + pad + col * (tile + gap);
     key.rect.xmax = key.rect.xmin + tile;
-    key.rect.ymin = vk.grid_rect.ymin + pad + bar_h + gap + row * (tile + gap);
-    key.rect.ymax = key.rect.ymin + tile;
-    if (i < int(vk.shortcuts.size())) {
+    key.rect.ymax = tile_top - row * (tile + gap);
+    key.rect.ymin = key.rect.ymax - tile;
+    if (i < visible) {
       key.kind = VKKind::ShortcutTile;
-      key.code = i;
+      key.code = vk.grid_scroll + i;
     }
     else {
       key.kind = VKKind::PlusTile;
@@ -2281,6 +2324,8 @@ static void vk_close_overlay(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow 
   vk.press = VirtualKeyboard::Press::None;
   vk.ui_pressed = -1;
   vk.ui_moving = false;
+  vk.grid_delete_mode = false;
+  vk.grid_scrolling = false;
   vk.capture_slot = -1;
   vk.ui_keys.clear();
   vk_tag_redraw(win);
@@ -2386,6 +2431,26 @@ static void vk_editor_delete(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow 
   vk_editor_cancel(wm, win);
 }
 
+/* Delete mode: forget a shortcut from the grid. The tiles shift down, so the scroll clamps back
+ * if the deleted one was the last of the window, and delete mode stays armed for another tap. */
+static void vk_shortcut_remove(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win, int index)
+{
+  if (index < 0 || index >= int(vk.shortcuts.size())) {
+    return;
+  }
+  /* Removing a shortcut shifts every index after it; a held shortcut's bit would then point at a
+   * different entry, so any hold that is currently down has to go before the vector shrinks. */
+  if (vk.held_mask != 0) {
+    vk_release_held_shortcuts(vk, wm, win);
+  }
+  vk.shortcuts.remove(index);
+  vk_shortcuts_save(vk);
+  vk.grid_scroll = clamp_i(vk.grid_scroll, 0, max_ii(0, int(vk.shortcuts.size()) - VK_GRID_VISIBLE));
+  vk_grid_place(vk, win);
+  vk.ui_pressed = -1;
+  vk_tag_redraw(win);
+}
+
 /* A waiting slot was answered: store the captured key and whatever modifiers went with it, and
  * hand the keyboard back to typing the name. */
 static void vk_editor_capture(VirtualKeyboard &vk, wmWindow *win, int code, uint8_t mods)
@@ -2479,6 +2544,8 @@ static void vk_pie_release(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *w
     return;
   }
   vk.overlay = VirtualKeyboard::Overlay::Grid;
+  vk.grid_scroll = 0;
+  vk.grid_delete_mode = false;
   vk_grid_place(vk, win);
   vk.ui_pressed = -1;
   vk_tag_redraw(win);
@@ -2490,11 +2557,20 @@ static void vk_dispatch_ui(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *w
   switch (key.kind) {
     case VKKind::GridMove:
       break;
+    case VKKind::GridDelete:
+      vk.grid_delete_mode = !vk.grid_delete_mode;
+      vk_tag_redraw(win);
+      break;
     case VKKind::GridClose:
       vk_close_overlay(vk, wm, win);
       break;
     case VKKind::ShortcutTile:
-      vk_send_shortcut(vk, wm, win, vk.shortcuts[key.code], key.code);
+      if (vk.grid_delete_mode) {
+        vk_shortcut_remove(vk, wm, win, key.code);
+      }
+      else {
+        vk_send_shortcut(vk, wm, win, vk.shortcuts[key.code], key.code);
+      }
       break;
     case VKKind::PlusTile:
       vk.edit_index = -1;
@@ -2587,29 +2663,38 @@ static void vk_grid_shape(uint pos, const VirtualKeyboard &vk)
   BLI_rctf_rcti_copy(&panel, &vk.grid_rect);
   vk_draw_round_rect(pos, panel, 14.0f * scale, VK_COL_OVERLAY);
 
+  /* The bar sits along the top of the panel now, with the handle at the left and the delete and
+   * close buttons pinned to the right. */
   rctf bar = panel;
-  bar.ymax = bar.ymin + bar_h;
+  bar.ymin = bar.ymax - bar_h;
   vk_draw_rect(pos, bar, VK_COL_CAP_MOD);
 
+  const VirtualKeyboard::UIKey &move_key = vk.ui_keys[0];
   rctf handle;
-  handle.xmin = panel.xmin + pad;
-  handle.xmax = handle.xmin + bar_h;
-  handle.ymin = panel.ymin + pad;
-  handle.ymax = handle.ymin + bar_h;
+  BLI_rctf_rcti_copy(&handle, &move_key.rect);
   const bool handle_hot = (vk.ui_pressed == 0);
   vk_draw_round_rect(pos, handle, 6.0f * scale,
                      handle_hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOVE);
 
+  /* Delete mode: red so a glance shows the grid is one tap away from losing a shortcut. */
+  const VirtualKeyboard::UIKey &del_key = vk.ui_keys[1];
+  rctf del;
+  BLI_rctf_rcti_copy(&del, &del_key.rect);
+  const bool del_hot = (vk.ui_pressed == 1);
+  vk_draw_round_rect(pos, del, 6.0f * scale,
+                     del_hot ? VK_COL_CAP_PRESS :
+                               (vk.grid_delete_mode ? VK_COL_BAD : VK_COL_CAP_MOVE));
+
   /* The close ✕, at the far end of the same bar. */
-  const VirtualKeyboard::UIKey &close_key = vk.ui_keys[1];
+  const VirtualKeyboard::UIKey &close_key = vk.ui_keys[2];
   rctf close;
   BLI_rctf_rcti_copy(&close, &close_key.rect);
-  const bool close_hot = (vk.ui_pressed == 1);
+  const bool close_hot = (vk.ui_pressed == 2);
   vk_draw_round_rect(pos, close, 6.0f * scale,
                      close_hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOVE);
 
   for (const int i : vk.ui_keys.index_range()) {
-    if (i == 0 || i == 1) {
+    if (i < 3) {
       continue;
     }
     const VirtualKeyboard::UIKey &key = vk.ui_keys[i];
@@ -2618,7 +2703,16 @@ static void vk_grid_shape(uint pos, const VirtualKeyboard &vk)
     BLI_rctf_rcti_copy(&cap, &key.rect);
     const float radius = 8.0f * scale;
 
-    if (key.kind == VKKind::ShortcutTile && (vk.held_mask & (1u << uint(key.code)))) {
+    if (key.kind == VKKind::ShortcutTile && vk.grid_delete_mode) {
+      /* Delete mode: every tile is framed in red, ready to be removed on a tap. */
+      rctf out = cap;
+      out.xmin -= 2.0f * scale;
+      out.xmax += 2.0f * scale;
+      out.ymin -= 2.0f * scale;
+      out.ymax += 2.0f * scale;
+      vk_draw_round_rect(pos, out, radius, VK_COL_BAD);
+    }
+    else if (key.kind == VKKind::ShortcutTile && (vk.held_mask & (1u << uint(key.code)))) {
       /* A tile that is held down right now wears an amber frame. */
       rctf out = cap;
       out.xmin -= 2.0f * scale;
@@ -2644,8 +2738,9 @@ static void vk_grid_shape(uint pos, const VirtualKeyboard &vk)
       cap.ymax = cy + w * 0.5f;
     }
 
+    /* The "+" is green: it is the one tile that always adds, and it stands apart. */
     const float *color = (key.kind == VKKind::PlusTile) ?
-                             (hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOVE) :
+                             (hot ? VK_COL_CAP_PRESS : VK_COL_OK) :
                              (hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOD);
     vk_draw_round_rect(pos, cap, radius, color);
   }
@@ -2662,15 +2757,23 @@ static void vk_grid_labels(int font_id, const VirtualKeyboard &vk)
                         size,
                         VK_COL_TEXT_DIM);
 
+  /* Delete: a small ✕ of its own, dimmed when it is not armed, red when it is. */
   vk_draw_text_centered(font_id,
                         float(BLI_rcti_cent_x(&vk.ui_keys[1].rect)),
                         float(BLI_rcti_cent_y(&vk.ui_keys[1].rect)),
+                        vk.grid_delete_mode ? "✕" : "🗑",
+                        size * 1.1f,
+                        vk.grid_delete_mode ? VK_COL_TEXT : VK_COL_TEXT_DIM);
+
+  vk_draw_text_centered(font_id,
+                        float(BLI_rcti_cent_x(&vk.ui_keys[2].rect)),
+                        float(BLI_rcti_cent_y(&vk.ui_keys[2].rect)),
                         "✕",
                         size * 1.2f,
                         VK_COL_TEXT_DIM);
 
   for (const int i : vk.ui_keys.index_range()) {
-    if (i == 0 || i == 1) {
+    if (i < 3) {
       continue;
     }
     const VirtualKeyboard::UIKey &key = vk.ui_keys[i];
@@ -2682,6 +2785,13 @@ static void vk_grid_labels(int font_id, const VirtualKeyboard &vk)
       continue;
     }
     const VKShortcut &sc = vk.shortcuts[key.code];
+    if (vk.grid_delete_mode) {
+      /* In delete mode a tile shows what it is next to a red ✕, so a wrong shortcut is obvious
+       * before the tap commits to removing it. */
+      vk_draw_text_fit(font_id, cx, cy + size * 0.55f, box_w * 0.92f, sc.name, size, VK_COL_TEXT);
+      vk_draw_text_centered(font_id, cx, cy - size * 0.8f, "✕", size * 1.4f, VK_COL_TEXT);
+      continue;
+    }
     vk_draw_text_fit(font_id, cx, cy + size * 0.55f, box_w * 0.92f, sc.name, size, VK_COL_TEXT);
     char combo[96];
     vk_slot_label(sc, 0, combo, sizeof(combo));
@@ -3014,6 +3124,32 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
         return true;
       }
 
+      /* A vertical drag over the grid's tiles scrolls the window of shortcuts. */
+      if (vk.overlay == VirtualKeyboard::Overlay::Grid && vk.press == VirtualKeyboard::Press::UI &&
+          !vk.ui_moving && int(vk.shortcuts.size()) > VK_GRID_VISIBLE) {
+        const float scale = vk_scale();
+        const int tile = int(74.0f * scale);
+        const int gap = int(8.0f * scale);
+        const int step = tile + gap;
+        const int dy = xy[1] - vk.grid_down_y;
+        const int slop = int(10.0f * scale);
+        if (!vk.grid_scrolling && std::abs(dy) > slop) {
+          vk.grid_scrolling = true;
+        }
+        if (vk.grid_scrolling) {
+          /* Drag upward reveals the shortcuts below; window coords grow up, so dy > 0 scrolls
+           * toward the end of the list. A tile-column per row of travel, as the rows are drawn. */
+          int target = vk.grid_scroll_base + (dy / step) * 4;
+          target = clamp_i(target, 0, max_ii(0, int(vk.shortcuts.size()) - VK_GRID_VISIBLE));
+          if (target != vk.grid_scroll) {
+            vk.grid_scroll = target;
+            vk_grid_place(vk, win);
+            vk_tag_redraw(win);
+          }
+          return true;
+        }
+      }
+
       if (!open) {
         /* Moved without holding anything: the closed keyboard owns nothing to drag. */
         return false;
@@ -3119,6 +3255,14 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
           if (vk.ui_keys[index].kind == VKKind::GridMove) {
             vk.ui_moving = true;
             copy_v2_v2_int(vk.ui_drag_prev, vk.cursor);
+            vk.grid_scrolling = false;
+          }
+          else {
+            /* Remember where the drag started, so a vertical motion turns into paging and not a
+             * tile that slipped a row. */
+            vk.grid_down_y = vk.cursor[1];
+            vk.grid_scroll_base = vk.grid_scroll;
+            vk.grid_scrolling = false;
           }
         }
         else {
@@ -3131,9 +3275,12 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
           vk.press = VirtualKeyboard::Press::None;
           vk.ui_pressed = -1;
           const bool moved = vk.ui_moving;
+          const bool scrolled = vk.grid_scrolling;
           vk.ui_moving = false;
-          /* A drag was not a tap: sliding the panel off the handle must not press a tile too. */
-          if (!moved && index >= 0 && index < int(vk.ui_keys.size()) &&
+          vk.grid_scrolling = false;
+          /* A drag was not a tap: sliding the panel off the handle must not press a tile too, and
+           * a paging drag must not fire the shortcut under the finger either. */
+          if (!moved && !scrolled && index >= 0 && index < int(vk.ui_keys.size()) &&
               BLI_rcti_isect_pt_v(&vk.ui_keys[index].rect, vk.cursor)) {
             vk_dispatch_ui(vk, wm, win, index);
           }
