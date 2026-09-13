@@ -1541,7 +1541,9 @@ static void draw_performance_stats(Depsgraph *depsgraph,
  * timestamps consecutive viewport redraws: it reports the frame rate rendering
  * actually delivers without depending on playback or edits.
  *
- * - FPS: measured frame-to-frame delta, windowed average of the last 60 redraws.
+ * - FPS: exponential moving average of frame-to-frame delta, reacting within a
+ *   couple of redraws. In idle there are no redraws, so the readout holds the
+ *   last measured value and appends "(idle)" instead of pretending a number.
  * - RAM: resident set size of this process (MiB), refreshed once a second from
  *   /proc/self/statm. Android exposes no per-app GPU utilization to non-root
  *   apps, so no GPU metric is shown on purpose (RAM does have a public API,
@@ -1554,30 +1556,24 @@ static void draw_android_perf_stats(const float text_color[4],
 {
   using Clock = std::chrono::steady_clock;
 
-  static Clock::time_point prev_frame = Clock::now();
-  /* Rolling 60-frame average, like the perf probe. */
-  static double acc_time_ms = 0.0, acc_fps = 0.0;
-  static double smooth_ms = 0.0, smooth_fps = 0.0;
-  static int window_count = 0;
-  static constexpr int window = 60;
-  static bool window_valid = false;
-
   const Clock::time_point now = Clock::now();
+
+  /* Exponential moving average of per-frame time, updated on every redraw so the
+   * readout reacts within a couple of frames. A gap between redraws means idle
+   * (no new frames being produced) -- do not feed it to the average, and surface
+   * it on screen instead so it is obvious the number is held, not broken. */
+  static Clock::time_point prev_frame = Clock::now();
+  static bool have_frame = false;
+  static double ema_ms = 0.0;
+  static constexpr double ema_alpha = 0.15;
+  static constexpr double frame_gap_ms = 500.0;
+
   const double dt_ms = std::chrono::duration<double, std::milli>(now - prev_frame).count();
+  const bool stale = have_frame && dt_ms >= frame_gap_ms;
   prev_frame = now;
-  /* Drop sibling-redraw gaps and stalls; they are not render frames. */
-  if (dt_ms > 0.0 && dt_ms < 2000.0) {
-    acc_time_ms += dt_ms;
-    acc_fps += 1000.0 / dt_ms;
-    window_count++;
-  }
-  if (window_count >= window) {
-    smooth_ms = acc_time_ms / double(window_count);
-    smooth_fps = acc_fps / double(window_count);
-    acc_time_ms = 0.0;
-    acc_fps = 0.0;
-    window_count = 0;
-    window_valid = true;
+  if (dt_ms > 0.0 && dt_ms < frame_gap_ms) {
+    ema_ms = have_frame ? ema_ms + ema_alpha * (dt_ms - ema_ms) : dt_ms;
+    have_frame = true;
   }
 
   /* RSS once a second. */
@@ -1609,9 +1605,13 @@ static void draw_android_perf_stats(const float text_color[4],
   std::string values[2];
   /* FPS in red when it drops below this mobile-target floor. */
   const float alert_fps = 30.0f;
-  if (window_valid) {
-    values[0] = fmt::format("{:.1f} ({:.1f} ms)", smooth_fps, smooth_ms);
-    if (smooth_fps < alert_fps) {
+  if (have_frame) {
+    const double fps = 1000.0 / ema_ms;
+    values[0] = fmt::format("{:.1f} ({:.1f} ms)", fps, ema_ms);
+    if (stale) {
+      values[0] += " (idle)";
+    }
+    if (fps < alert_fps) {
       float4 alert_rgb = get_low_fps_color();
       BLF_color4fv(font_id, alert_rgb);
     }
