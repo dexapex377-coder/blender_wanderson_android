@@ -105,6 +105,31 @@ PassMain::Sub &MeshPass::get_subpass(eGeometryType geometry_type,
 /** \name OpaquePass
  * \{ */
 
+namespace {
+/* DOWNSTREAM (Android): Bind the GBuffer framebuffer with an explicit load/store config.
+ * Material and normal attachments are completely overwritten for every fragment that survives the
+ * depth test (the prepass never discards after writing, and the resolve skips background pixels),
+ * so we skip loading their previous tile content: ~12 B/px less DRAM traffic on the opaque path.
+ * When `needs_previous` is true (a previous in-front GBuffer pass wrote pixels this pass won't
+ * touch), the color attachments must be loaded instead. */
+void gbuffer_bind_loadstore(gpu::FrameBuffer *fb, const bool needs_previous, const bool has_object_id)
+{
+  static const GPULoadStore load = {GPU_LOADACTION_LOAD, GPU_STOREACTION_STORE, {0.0, 0.0, 0.0, 0.0}};
+  static const GPULoadStore overwritten = {GPU_LOADACTION_DONT_CARE,
+                                           GPU_STOREACTION_STORE,
+                                           {0.0, 0.0, 0.0, 0.0}};
+  GPULoadStore actions[4] = {{GPU_LOADACTION_LOAD, GPU_STOREACTION_STORE, {1.0, 0.0, 0.0, 0.0}},
+                             load,
+                             load,
+                             load};
+  if (!needs_previous) {
+    actions[1] = overwritten; /* gbuffer_material_tx. */
+    actions[2] = overwritten; /* gbuffer_normal_tx. */
+  }
+  GPU_framebuffer_bind_loadstore(fb, actions, has_object_id ? 4 : 3);
+}
+}  // namespace
+
 void OpaquePass::sync(const SceneState &scene_state, SceneResources &resources)
 {
   DRWState state = DRW_STATE_WRITE_COLOR | DRW_STATE_WRITE_DEPTH | DRW_STATE_DEPTH_LESS_EQUAL |
@@ -157,16 +182,18 @@ void OpaquePass::draw(Manager &manager,
                                GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT);
 
   GPUAttachment object_id_attachment = GPU_ATTACHMENT_NONE;
-  if (resources.object_id_tx.is_valid()) {
+  const bool has_object_id = resources.object_id_tx.is_valid();
+  if (has_object_id) {
     object_id_attachment = GPU_ATTACHMENT_TEXTURE(resources.object_id_tx);
   }
+  const bool has_in_front = !gbuffer_in_front_ps_.is_empty();
 
   if (!gbuffer_in_front_ps_.is_empty()) {
     gbuffer_in_front_fb.ensure(GPU_ATTACHMENT_TEXTURE(resources.depth_tx),
                                GPU_ATTACHMENT_TEXTURE(gbuffer_material_tx),
                                GPU_ATTACHMENT_TEXTURE(gbuffer_normal_tx),
                                object_id_attachment);
-    gbuffer_in_front_fb.bind();
+    gbuffer_bind_loadstore(gbuffer_in_front_fb, false, has_object_id);
 
     manager.submit(gbuffer_in_front_ps_, view);
 
@@ -180,7 +207,7 @@ void OpaquePass::draw(Manager &manager,
                       GPU_ATTACHMENT_TEXTURE(gbuffer_material_tx),
                       GPU_ATTACHMENT_TEXTURE(gbuffer_normal_tx),
                       object_id_attachment);
-    gbuffer_fb.bind();
+    gbuffer_bind_loadstore(gbuffer_fb, has_in_front, has_object_id);
 
     manager.submit(gbuffer_ps_, view);
   }
