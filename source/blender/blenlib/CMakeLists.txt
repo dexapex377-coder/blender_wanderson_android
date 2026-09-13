@@ -346,6 +346,7 @@ set(SRC
   BLI_ordered_edge.hh
   BLI_parameter_pack_utils.hh
   BLI_path_utils.hh
+  BLI_perf_probe.hh
   BLI_polyfill_2d.hh
   BLI_polyfill_2d_beautify.hh
   BLI_pool.hh

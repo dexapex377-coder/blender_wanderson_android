@@ -115,6 +115,8 @@ enum class VKKind {
   PlusTile,
   /** The handle the grid is dragged by. */
   GridMove,
+  /** Grid: the small ✕ that closes the grid and hands input back to the viewport. */
+  GridClose,
   /** Editor: the named slot buttons, `code` 0..3. */
   EditSlot,
   /** Editor: the Hold toggle. */
@@ -122,6 +124,8 @@ enum class VKKind {
   /** Editor: Save / Cancel. */
   EditSave,
   EditCancel,
+  /** Editor: Delete the shortcut being edited (shown for existing shortcuts only). */
+  EditDelete,
 };
 
 /* Modifier slots, in the order they are shown. */
@@ -1858,6 +1862,17 @@ static void vk_grid_place(VirtualKeyboard &vk, const wmWindow *win)
     key.rect.ymax = key.rect.ymin + bar_h;
     vk.ui_keys.append(key);
   }
+  {
+    /* The ✕ that closes the grid, up against the same bar. */
+    VirtualKeyboard::UIKey key;
+    key.kind = VKKind::GridClose;
+    key.code = 1;
+    key.rect.xmin = vk.grid_rect.xmax - pad - bar_h;
+    key.rect.xmax = key.rect.xmin + bar_h;
+    key.rect.ymin = vk.grid_rect.ymin + pad;
+    key.rect.ymax = key.rect.ymin + bar_h;
+    vk.ui_keys.append(key);
+  }
   for (int i = 0; i < count; i++) {
     const int col = i % cols;
     const int row = i / cols;
@@ -1913,12 +1928,22 @@ static void vk_editor_place(VirtualKeyboard &vk, const wmWindow *win)
     vk.ui_keys.append(key);
   }
   y += row_h + gap;
-  /* Hold toggle. */
+  /* Hold toggle, and next to it Delete for an existing shortcut. */
   {
     VirtualKeyboard::UIKey key;
     key.kind = VKKind::EditHold;
     key.code = 0;
     key.rect.xmin = vk.edit_rect.xmin + pad;
+    key.rect.xmax = key.rect.xmin + half_w;
+    key.rect.ymin = y;
+    key.rect.ymax = y + row_h;
+    vk.ui_keys.append(key);
+  }
+  if (vk.edit_index >= 0 && vk.edit_index < int(vk.shortcuts.size())) {
+    VirtualKeyboard::UIKey key;
+    key.kind = VKKind::EditDelete;
+    key.code = 0;
+    key.rect.xmin = vk.edit_rect.xmin + pad + half_w + gap;
     key.rect.xmax = key.rect.xmin + half_w;
     key.rect.ymin = y;
     key.rect.ymax = y + row_h;
@@ -2350,6 +2375,17 @@ static void vk_editor_cancel(wmWindowManager *wm, wmWindow *win)
   vk_tag_redraw(win);
 }
 
+/* Delete the shortcut being edited. Only reachable for an existing slot; a new-draft editor
+ * behaves like Cancel. */
+static void vk_editor_delete(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win)
+{
+  if (vk.edit_index >= 0 && vk.edit_index < int(vk.shortcuts.size())) {
+    vk.shortcuts.remove(vk.edit_index);
+    vk_shortcuts_save(vk);
+  }
+  vk_editor_cancel(wm, win);
+}
+
 /* A waiting slot was answered: store the captured key and whatever modifiers went with it, and
  * hand the keyboard back to typing the name. */
 static void vk_editor_capture(VirtualKeyboard &vk, wmWindow *win, int code, uint8_t mods)
@@ -2454,6 +2490,9 @@ static void vk_dispatch_ui(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *w
   switch (key.kind) {
     case VKKind::GridMove:
       break;
+    case VKKind::GridClose:
+      vk_close_overlay(vk, wm, win);
+      break;
     case VKKind::ShortcutTile:
       vk_send_shortcut(vk, wm, win, vk.shortcuts[key.code], key.code);
       break;
@@ -2475,6 +2514,9 @@ static void vk_dispatch_ui(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *w
       break;
     case VKKind::EditCancel:
       vk_editor_cancel(wm, win);
+      break;
+    case VKKind::EditDelete:
+      vk_editor_delete(vk, wm, win);
       break;
     default:
       break;
@@ -2558,8 +2600,16 @@ static void vk_grid_shape(uint pos, const VirtualKeyboard &vk)
   vk_draw_round_rect(pos, handle, 6.0f * scale,
                      handle_hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOVE);
 
+  /* The close ✕, at the far end of the same bar. */
+  const VirtualKeyboard::UIKey &close_key = vk.ui_keys[1];
+  rctf close;
+  BLI_rctf_rcti_copy(&close, &close_key.rect);
+  const bool close_hot = (vk.ui_pressed == 1);
+  vk_draw_round_rect(pos, close, 6.0f * scale,
+                     close_hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOVE);
+
   for (const int i : vk.ui_keys.index_range()) {
-    if (i == 0) {
+    if (i == 0 || i == 1) {
       continue;
     }
     const VirtualKeyboard::UIKey &key = vk.ui_keys[i];
@@ -2582,6 +2632,18 @@ static void vk_grid_shape(uint pos, const VirtualKeyboard &vk)
       cap.ymax -= 2.0f * scale;
     }
 
+    if (key.kind == VKKind::PlusTile) {
+      /* Keep the "+" tile a graceful small square instead of eating a full cell. */
+      const float shrink = 0.38f;
+      const float w = float(BLI_rcti_size_x(&key.rect)) * shrink;
+      float cx = float(BLI_rcti_cent_x(&key.rect));
+      float cy = float(BLI_rcti_cent_y(&key.rect));
+      cap.xmin = cx - w * 0.5f;
+      cap.xmax = cx + w * 0.5f;
+      cap.ymin = cy - w * 0.5f;
+      cap.ymax = cy + w * 0.5f;
+    }
+
     const float *color = (key.kind == VKKind::PlusTile) ?
                              (hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOVE) :
                              (hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOD);
@@ -2600,8 +2662,15 @@ static void vk_grid_labels(int font_id, const VirtualKeyboard &vk)
                         size,
                         VK_COL_TEXT_DIM);
 
+  vk_draw_text_centered(font_id,
+                        float(BLI_rcti_cent_x(&vk.ui_keys[1].rect)),
+                        float(BLI_rcti_cent_y(&vk.ui_keys[1].rect)),
+                        "✕",
+                        size * 1.2f,
+                        VK_COL_TEXT_DIM);
+
   for (const int i : vk.ui_keys.index_range()) {
-    if (i == 0) {
+    if (i == 0 || i == 1) {
       continue;
     }
     const VirtualKeyboard::UIKey &key = vk.ui_keys[i];
@@ -2609,7 +2678,7 @@ static void vk_grid_labels(int font_id, const VirtualKeyboard &vk)
     const float cy = float(BLI_rcti_cent_y(&key.rect));
     const float box_w = float(BLI_rcti_size_x(&key.rect));
     if (key.kind == VKKind::PlusTile) {
-      vk_draw_text_centered(font_id, cx, cy, "+", 26.0f * scale, VK_COL_TEXT);
+      vk_draw_text_centered(font_id, cx, cy, "+", 16.0f * scale, VK_COL_TEXT);
       continue;
     }
     const VKShortcut &sc = vk.shortcuts[key.code];
@@ -2657,6 +2726,9 @@ static void vk_editor_shape(uint pos, const VirtualKeyboard &vk)
         break;
       case VKKind::EditHold:
         color = hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOD;
+        break;
+      case VKKind::EditDelete:
+        color = hot ? VK_COL_CAP_PRESS : VK_COL_BAD;
         break;
       case VKKind::EditSlot:
         color = capturing ? VK_COL_AMBER : (hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOD);
@@ -2720,6 +2792,9 @@ static void vk_editor_labels(int font_id, const VirtualKeyboard &vk)
         break;
       case VKKind::EditCancel:
         vk_draw_text_centered(font_id, cx, cy, "Cancel", size, VK_COL_TEXT_ON);
+        break;
+      case VKKind::EditDelete:
+        vk_draw_text_centered(font_id, cx, cy, "Delete", size, VK_COL_TEXT_ON);
         break;
       default:
         break;
@@ -3030,10 +3105,10 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
           const int index = vk_ui_key_at(vk, vk.cursor);
           if (index < 0) {
             if (!BLI_rcti_isect_pt_v(&vk.grid_rect, vk.cursor)) {
-              /* Nowhere on the panel: dismissing is its own action, and the tap that did it must
-               * not fall through to select or draw underneath. */
-              vk_close_overlay(vk, wm, win);
-              return true;
+              /* Nowhere on the panel: keep the grid up and let the tap pass through to paint or
+               * select underneath. Closing here made every viewport tap dismiss the grid, which a
+               * stroke crossing the panel could not survive; the ✕ is the way out. */
+              return false;
             }
             /* Inside the panel but between or off a tile: a no-op that leaves the grid up, so a
              * finger half a tile off target does not dismiss the panel one shortcut later. */
@@ -3048,7 +3123,9 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
         }
         else {
           if (vk.press != VirtualKeyboard::Press::UI) {
-            return true;
+            /* A release that belongs to a tap we passed through must end in Blender too, or the
+             * operator underneath is left waiting forever. */
+            return false;
           }
           const int index = vk.ui_pressed;
           vk.press = VirtualKeyboard::Press::None;

@@ -39,6 +39,7 @@
 #include "BLI_listbase.hh"
 #include "BLI_math_vector_c.hh"
 #include "BLI_path_utils.hh"
+#include "BLI_perf_probe.hh"
 #include "BLI_rect.hh"
 #include "BLI_string.hh"
 #include "BLI_string_utf8.hh"
@@ -2948,12 +2949,14 @@ void wm_window_raise(wmWindow *win)
 
 void wm_window_swap_buffer_acquire(wmWindow *win)
 {
+  PERF_ZONE(wm_window_swap_acquire);
   GHOST_IWindow *ghost_window = static_cast<GHOST_IWindow *>(win->runtime->ghostwin);
   ghost_window->swapBufferAcquire();
 }
 
 void wm_window_swap_buffer_release(wmWindow *win)
 {
+  PERF_ZONE(wm_window_swap_release);
   GHOST_IWindow *ghost_window = static_cast<GHOST_IWindow *>(win->runtime->ghostwin);
   ghost_window->swapBufferRelease();
 }

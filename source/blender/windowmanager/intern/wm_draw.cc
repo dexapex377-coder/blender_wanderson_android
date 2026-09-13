@@ -27,6 +27,7 @@
 #include "BLI_math_matrix_c.hh"
 #include "BLI_math_vector_c.hh"
 #include "BLI_math_vector_types.hh"
+#include "BLI_perf_probe.hh"
 #include "BLI_rect.hh"
 #include "BLI_utildefines.hh"
 
@@ -1236,6 +1237,7 @@ static void wm_draw_window_onscreen(bContext *C, wmWindow *win, int view)
 
 static void wm_draw_window(bContext *C, wmWindow *win)
 {
+  PERF_ZONE(wm_draw_window);
   PRF_scope(ProfileCategory::Draw);
   GPU_context_begin_frame(static_cast<GPUContext *>(win->runtime->gpuctx));
 
@@ -1642,6 +1644,7 @@ void WM_paint_cursor_tag_redraw(wmWindow *win, ARegion * /*region*/)
 
 void wm_draw_update(bContext *C)
 {
+  PERF_ZONE(wm_draw_update);
   PRF_scope(ProfileCategory::Draw);
 
   Main *bmain = CTX_data_main(C);

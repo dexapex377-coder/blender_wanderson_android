@@ -6,6 +6,7 @@
  * \ingroup creator
  */
 
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -350,6 +351,7 @@ int main(int argc,
 #ifdef WITH_GHOST_ANDROID
   fprintf(stderr, "[BlenderAndroid] creator: launch entered\n");
   fflush(stderr);
+  const auto t_launch = std::chrono::steady_clock::now();
 #endif
 
   bContext *C;
@@ -686,8 +688,13 @@ int main(int argc,
 #ifdef WITH_GHOST_ANDROID
     /* Return to the NativeActivity loop, which drives WM_main_loop_body. */
     WM_main_entry(C);
-    fprintf(stderr, "[BlenderAndroid] creator: event loop ready\n");
-    fflush(stderr);
+    {
+      const double init_ms = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - t_launch)
+                                 .count();
+      fprintf(stderr, "[BlenderAndroid] creator: event loop ready (init %.1f ms)\n", init_ms);
+      fflush(stderr);
+    }
     GHOST_androidfinalize(C);
   }
 #else

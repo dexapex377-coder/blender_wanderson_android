@@ -14,6 +14,7 @@
 #include "BKE_object.hh"
 #include "BKE_scene.hh"
 
+#include "BLI_perf_probe.hh"
 #include "BLI_rect.hh"
 #include "BLI_time.hh"
 
@@ -540,6 +541,7 @@ bool Instance::do_planar_probe_sync() const
 
 void Instance::render_sample()
 {
+  PERF_ZONE(EEVEE_render_sample);
   if (sampling.finished_viewport()) {
     DRW_submission_start();
     uniform_data.push_update();
@@ -728,6 +730,7 @@ void Instance::render_frame(RenderEngine *engine, RenderLayer *render_layer, con
 
 void Instance::draw_viewport()
 {
+  PERF_ZONE(EEVEE_draw_viewport);
   if (skip_render_ || !is_loaded(needed_shaders)) {
     DefaultFramebufferList *dfbl = draw_ctx->viewport_framebuffer_list_get();
     GPU_framebuffer_clear_color_depth(dfbl->default_fb, double4(0.0), 1.0f);

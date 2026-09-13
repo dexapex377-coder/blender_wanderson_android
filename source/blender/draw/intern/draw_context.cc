@@ -17,6 +17,7 @@
 #include "BLI_math_matrix_c.hh"
 #include "BLI_math_matrix_types.hh"
 #include "BLI_math_vector_c.hh"
+#include "BLI_perf_probe.hh"
 #include "BLI_rect.hh"
 #include "BLI_string.hh"
 #include "BLI_sys_types.hh"
@@ -1631,6 +1632,7 @@ static void drw_draw_render_loop_2d(DRWContext &draw_ctx)
 
 void DRW_draw_view(const bContext *C)
 {
+  PERF_ZONE(DRW_draw_view);
   Depsgraph *depsgraph = CTX_data_expect_evaluated_depsgraph(C);
   ARegion *region = CTX_wm_region(C);
   View3D *v3d = CTX_wm_view3d(C);

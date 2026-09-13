@@ -1055,7 +1055,10 @@ extern "C" bool GHOST_android_open_url(const char *url)
 
 GHOST_TSuccess GHOST_SystemAndroid::popupOnScreenKeyboard(GHOST_IWindow * /*window*/)
 {
-  return android_call_activity_void(app_, "showKeyboard");
+  /* The touch overlay (floating ball → pie → board) is the keyboard here; raising the platform IME
+   * on every text-field tap just covers the field with a second keyboard nobody types into. Keep it
+   * down -- the Java showKeyboard path exists and works, but nothing on the device calls it. */
+  return GHOST_kSuccess;
 }
 
 GHOST_TSuccess GHOST_SystemAndroid::hideOnScreenKeyboard(GHOST_IWindow * /*window*/)
