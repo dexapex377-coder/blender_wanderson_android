@@ -2094,12 +2094,89 @@ static void vk_press_mods_mask(wmWindowManager *wm, wmWindow *win, uint8_t mods,
   }
 }
 
+/* Whether a slot's captured key is itself a modifier, i.e. a bare Ctrl/Shift/Alt stored alone. */
+static bool vk_ghost_modifier_key(GHOST_TKey key)
+{
+  return ELEM(key,
+             GHOST_kKeyLeftShift,
+             GHOST_kKeyRightShift,
+             GHOST_kKeyLeftControl,
+             GHOST_kKeyRightControl,
+             GHOST_kKeyLeftAlt,
+             GHOST_kKeyRightAlt);
+}
+
+/**
+ * All the modifiers a shortcut wants, whichever way its slots carry them: from the per-slot
+ * modifier mask of a captured combination (Shift latched, then A -> A with the Shift bit), and
+ * from slots that are themselves the bare ghost key of a modifier (Shift as its own slot). Both
+ * shapes arise in the editor, and both must press the modifier with the key.
+ */
+static uint8_t vk_shortcut_mods(const VKShortcut &sc)
+{
+  uint8_t bits = 0;
+  for (int i = 0; i < sc.keys_num; i++) {
+    bits |= sc.mods[i];
+    switch (GHOST_TKey(sc.keys[i])) {
+      case GHOST_kKeyLeftShift:
+      case GHOST_kKeyRightShift:
+        bits |= uint8_t(1 << VK_MOD_SHIFT);
+        break;
+      case GHOST_kKeyLeftControl:
+      case GHOST_kKeyRightControl:
+        bits |= uint8_t(1 << VK_MOD_CTRL);
+        break;
+      case GHOST_kKeyLeftAlt:
+      case GHOST_kKeyRightAlt:
+        bits |= uint8_t(1 << VK_MOD_ALT);
+        break;
+      default:
+        break;
+    }
+  }
+  return bits;
+}
+
+/* A tile that is nothing but modifiers taps each one; a tile with letter keys holds them with the
+ * modifiers it carries. */
+static bool vk_shortcut_has_letter(const VKShortcut &sc)
+{
+  for (int i = 0; i < sc.keys_num; i++) {
+    if (!vk_ghost_modifier_key(GHOST_TKey(sc.keys[i]))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* Let a held combination go: letter keys up first, then the modifiers that were gathered for it. */
+static void vk_shortcut_release(
+    VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win, const VKShortcut &sc)
+{
+  const bool has_letter = vk_shortcut_has_letter(sc);
+  for (int i = sc.keys_num - 1; i >= 0; i--) {
+    if (has_letter && vk_ghost_modifier_key(GHOST_TKey(sc.keys[i]))) {
+      continue;
+    }
+    vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, false);
+  }
+  if (has_letter) {
+    vk_press_mods_mask(wm, win, vk_shortcut_mods(sc), false);
+  }
+}
+
 /**
  * Play a shortcut the way a keyboard would type it.
  *
  * A plain tile fires each slot in turn, modifiers and key. A Hold tile is sticky instead: the
  * first tap presses the whole combination down and leaves it down, and the second lets it go, so
  * Ctrl can be "on" while the other hand or thumb works the viewport.
+ *
+ * The modifiers of every slot are gathered first and held across the letter keys, so the order of
+ * the slots never matters the way a per-slot press/release used to: a combination stored as
+ * [Shift][A] released the Shift before the A was tapped and left it a bare A; and one stored as a
+ * single [A with Shift] held the Shift only while that one slot played. Both now press Shift, play
+ * A, then let Shift go.
  */
 static void vk_send_shortcut(VirtualKeyboard &vk,
                              wmWindowManager *wm,
@@ -2115,18 +2192,22 @@ static void vk_send_shortcut(VirtualKeyboard &vk,
   vk_target_position(vk, win, target);
   copy_v2_v2_int(win->runtime->eventstate->xy, target);
 
+  const bool has_letter = vk_shortcut_has_letter(sc);
+
   if (sc.hold && index >= 0 && index < 32) {
     const uint32_t bit = 1u << uint(index);
     if (vk.held_mask & bit) {
-      for (int i = sc.keys_num - 1; i >= 0; i--) {
-        vk_press_mods_mask(wm, win, sc.mods[i], false);
-        vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, false);
-      }
+      vk_shortcut_release(vk, wm, win, sc);
       vk.held_mask &= ~bit;
     }
     else {
+      if (has_letter) {
+        vk_press_mods_mask(wm, win, vk_shortcut_mods(sc), true);
+      }
       for (int i = 0; i < sc.keys_num; i++) {
-        vk_press_mods_mask(wm, win, sc.mods[i], true);
+        if (has_letter && vk_ghost_modifier_key(GHOST_TKey(sc.keys[i]))) {
+          continue;
+        }
         vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, true);
       }
       vk.held_mask |= bit;
@@ -2134,12 +2215,23 @@ static void vk_send_shortcut(VirtualKeyboard &vk,
     return;
   }
 
+  if (!has_letter) {
+    for (int i = 0; i < sc.keys_num; i++) {
+      vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, true);
+      vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, false);
+    }
+    return;
+  }
+
+  vk_press_mods_mask(wm, win, vk_shortcut_mods(sc), true);
   for (int i = 0; i < sc.keys_num; i++) {
-    vk_press_mods_mask(wm, win, sc.mods[i], true);
+    if (vk_ghost_modifier_key(GHOST_TKey(sc.keys[i]))) {
+      continue;
+    }
     vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, true);
     vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, false);
-    vk_press_mods_mask(wm, win, sc.mods[i], false);
   }
+  vk_press_mods_mask(wm, win, vk_shortcut_mods(sc), false);
 }
 
 /* Let any Hold tile that is currently down go, so nothing is left pressed when an overlay closes. */
@@ -2150,11 +2242,7 @@ static void vk_release_held_shortcuts(VirtualKeyboard &vk, wmWindowManager *wm, 
     if (!(vk.held_mask & bit)) {
       continue;
     }
-    const VKShortcut &sc = vk.shortcuts[i];
-    for (int j = sc.keys_num - 1; j >= 0; j--) {
-      vk_press_mods_mask(wm, win, sc.mods[j], false);
-      vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[j]), nullptr, false);
-    }
+    vk_shortcut_release(vk, wm, win, vk.shortcuts[i]);
     vk.held_mask &= ~bit;
   }
 }
@@ -2803,8 +2891,20 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
                                      const void *customdata)
 {
   VirtualKeyboard &vk = g_vk;
-  if (vk.win != win) {
-    return false;
+  if (vk.open) {
+    /* An open keyboard belongs to the window that opened it. */
+    if (vk.win != win) {
+      return false;
+    }
+  }
+  else if (vk.win != win) {
+    /* Adopt the window the user is touching: the floating ball and its pie answer from the very
+     * first tap, without needing the keyboard button to have armed them once. The callback is
+     * cheap and registered here, exactly as case vk_open() would. */
+    vk.win = win;
+    if (vk.draw_handle == nullptr) {
+      vk.draw_handle = WM_draw_cb_activate(win, vk_draw_cb, nullptr);
+    }
   }
   /* Placement on the way in, so a tap cannot land on a ball that a recent rotation just moved. */
   vk_overlay_place(vk, win);
@@ -2929,9 +3029,14 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
         if (down) {
           const int index = vk_ui_key_at(vk, vk.cursor);
           if (index < 0) {
-            /* Nowhere on the panel: dismissing is its own action, and the tap that did it must
-             * not fall through to select or draw underneath. */
-            vk_close_overlay(vk, wm, win);
+            if (!BLI_rcti_isect_pt_v(&vk.grid_rect, vk.cursor)) {
+              /* Nowhere on the panel: dismissing is its own action, and the tap that did it must
+               * not fall through to select or draw underneath. */
+              vk_close_overlay(vk, wm, win);
+              return true;
+            }
+            /* Inside the panel but between or off a tile: a no-op that leaves the grid up, so a
+             * finger half a tile off target does not dismiss the panel one shortcut later. */
             return true;
           }
           vk.press = VirtualKeyboard::Press::UI;
