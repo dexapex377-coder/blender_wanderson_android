@@ -12,24 +12,27 @@ class STATUSBAR_HT_header(Header):
         # Touch: two header regions, so the keyboard button can sit still while the rest scrolls.
         # See statusbar_create() for why. The one-region case is still handled, because a window
         # restored from an older configuration can have a status bar that predates the split.
-        if context.region.alignment == 'LEFT':
-            self._draw_keyboard(context)
-            return
+        #
+        # TODO: the on-screen keyboard button has been hidden (it is redundant with the touch
+        # ball + pie). The region logic is left intact so nothing else breaks.
+        # if context.region.alignment == 'LEFT':
+        #     self._draw_keyboard(context)
+        #     return
 
         # One region only, from a window that predates the split: the old order, all in this one.
-        if not any(region.alignment == 'LEFT' for region in context.area.regions):
-            self._draw_keyboard(context)
+        # if not any(region.alignment == 'LEFT' for region in context.area.regions):
+        #     self._draw_keyboard(context)
 
         self._draw_info(context)
 
-    def _draw_keyboard(self, _context):
-        layout = self.layout
-
-        # Touch: the on-screen keyboard lives at the far left of the status bar, which is always
-        # on screen and within thumb reach whatever workspace is open. It is alone in this region
-        # so that dragging the bar sideways to read the figures on the right cannot carry it off
-        # the edge.
-        layout.operator("wm.virtual_keyboard_toggle", text="KEYBOARD", icon='KEY_MENU')
+    # def _draw_keyboard(self, _context):
+    #     layout = self.layout
+    #
+    #     # Touch: the on-screen keyboard lives at the far left of the status bar, which is always
+    #     # on screen and within thumb reach whatever workspace is open. It is alone in this region
+    #     # so that dragging the bar sideways to read the figures on the right cannot carry it off
+    #     # the edge.
+    #     layout.operator("wm.virtual_keyboard_toggle", text="KEYBOARD", icon='KEY_MENU')
 
     def _draw_info(self, context):
         """The hints, the messages and the figures.
