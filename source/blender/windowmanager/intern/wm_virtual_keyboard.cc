@@ -1559,6 +1559,7 @@ void wm_virtual_keyboard_window_close(wmWindow *win)
 
 static const float VK_COL_OVERLAY[4] = {0.12f, 0.12f, 0.12f, 0.95f};
 static const float VK_COL_AMBER[4] = {0.99f, 0.75f, 0.02f, 1.0f};
+static const float VK_COL_BLENDER[4] = {0.96f, 0.47f, 0.09f, 1.0f};
 static const float VK_COL_OK[4] = {0.24f, 0.56f, 0.28f, 1.0f};
 static const float VK_COL_BAD[4] = {0.62f, 0.24f, 0.24f, 1.0f};
 
@@ -1607,16 +1608,6 @@ static void vk_draw_ring(
   }
   immUniformColor4fv(color);
   vk_ring_verts(pos, cx, cy, r_out, r_in, 0.0f, float(M_PI * 2.0), 48);
-}
-
-static void vk_draw_caret(uint pos, float cx, float cy, float r, const float color[4])
-{
-  immUniformColor4fv(color);
-  immBegin(GPU_PRIM_TRIS, 3);
-  immVertex2f(pos, cx, cy - r * 0.45f);
-  immVertex2f(pos, cx - r * 0.35f, cy + r * 0.25f);
-  immVertex2f(pos, cx + r * 0.35f, cy + r * 0.25f);
-  immEnd();
 }
 
 static void vk_draw_text_centered(
@@ -1705,11 +1696,11 @@ static void vk_place_ball(VirtualKeyboard &vk, const wmWindow *win)
     rect.ymin = 0;
     rect.ymax = win->sizey;
   }
-  /* The navigation column runs down the right edge of the region from its top
-   * (view3d_gizmo_navigate.cc); the ball hangs just below where a full column ends. */
-  const float cx = float(rect.xmax) - 22.5f * scale;
-  const float column_end = max_ff(float(rect.ymin) + r * 2.0f, float(rect.ymax) - 230.0f * scale);
-  const float cy = column_end - 8.0f * scale - r;
+  /* The navigation gizmo column runs down the right edge from the region's top
+   * (view3d_gizmo_navigate.cc), so the corner below it is free; a floating button belongs there,
+   * within thumb's reach. */
+  const float cx = float(rect.xmax) - (r + 8.0f * scale);
+  const float cy = float(rect.ymin) + 8.0f * scale + r;
   vk.ball_rect.xmin = int(cx - r);
   vk.ball_rect.xmax = int(cx + r);
   vk.ball_rect.ymin = int(cy - r);
@@ -1757,6 +1748,22 @@ static int vk_pie_item_at(const VirtualKeyboard &vk, const int xy[2])
  * Returns null when the code is not one of the on-screen keys. */
 static const char *vk_ghost_key_label(int code)
 {
+  /* A slot can own a bare modifier or Caps Lock, captured as its ghost key. */
+  switch (code) {
+    case GHOST_kKeyLeftControl:
+    case GHOST_kKeyRightControl:
+      return "Ctrl";
+    case GHOST_kKeyLeftShift:
+    case GHOST_kKeyRightShift:
+      return "Shift";
+    case GHOST_kKeyLeftAlt:
+    case GHOST_kKeyRightAlt:
+      return "Alt";
+    case GHOST_kKeyCapsLock:
+      return "Caps";
+    default:
+      break;
+  }
   static const VKRow *const blocks[] = {vk_main_rows, vk_pad_rows, vk_number_rows};
   const int blocks_num[] = {
       int(ARRAY_SIZE(vk_main_rows)),
@@ -2255,30 +2262,64 @@ static void vk_editor_cancel(wmWindowManager *wm, wmWindow *win)
   vk_tag_redraw(win);
 }
 
+/* A waiting slot was answered: store the captured key and whatever modifiers went with it, and
+ * hand the keyboard back to typing the name. */
+static void vk_editor_capture(VirtualKeyboard &vk, wmWindow *win, int code, uint8_t mods)
+{
+  vk.edit.keys[vk.capture_slot] = code;
+  vk.edit.mods[vk.capture_slot] = mods;
+  vk.edit.keys_num = 0;
+  for (int s = 0; s < 4; s++) {
+    if (vk.edit.keys[s] != 0) {
+      vk.edit.keys_num = s + 1;
+    }
+  }
+  vk.capture_slot = -1;
+  vk.mods = 0;
+  vk_tag_redraw(win);
+}
+
 /* Keyboard keys become the editor's input while it is up. */
 static void vk_editor_key(VirtualKeyboard &vk,
                           wmWindowManager *wm,
                           wmWindow *win,
                           const VKKeySpec &spec)
 {
-  if (spec.kind != VKKind::Key) {
-    return;
-  }
-
   /* A waiting slot captures the next key with whatever modifiers are latched, so a combination
-   * like Ctrl+Shift+C becomes one slot. */
+   * like Ctrl+Shift+C becomes one slot. Esc backs out of the capture without being captured;
+   * modifiers and Caps join the combination or stand for themselves, so a slot can own a bare
+   * Ctrl, Shift or Alt too. */
   if (vk.capture_slot >= 0) {
-    vk.edit.keys[vk.capture_slot] = int(spec.code);
-    vk.edit.mods[vk.capture_slot] = vk.mods;
-    vk.edit.keys_num = 0;
-    for (int s = 0; s < 4; s++) {
-      if (vk.edit.keys[s] != 0) {
-        vk.edit.keys_num = s + 1;
-      }
+    if ((spec.kind == VKKind::Key && spec.code == GHOST_kKeyEsc) || spec.kind == VKKind::Close) {
+      vk.capture_slot = -1;
+      vk_tag_redraw(win);
+      return;
     }
-    vk.capture_slot = -1;
-    vk_tag_redraw(win);
-    return;
+    switch (spec.kind) {
+      case VKKind::Key:
+        vk_editor_capture(vk, win, int(spec.code), vk.mods);
+        return;
+      case VKKind::Mod: {
+        const uint8_t bit = uint8_t(1 << spec.code);
+        if (vk.mods & bit) {
+          /* Already latched for the combination: pressing it again means the modifier itself is
+           * the key the slot is for, so capture a bare Ctrl/Shift/Alt. */
+          vk_editor_capture(vk, win, int(vk_modifier_ghost_key(spec.code)), 0);
+        }
+        else {
+          /* A modifier that is not on yet joins the coming combination. */
+          vk.mods |= bit;
+          vk_tag_redraw(win);
+        }
+        return;
+      }
+      case VKKind::Caps:
+        vk_editor_capture(vk, win, int(GHOST_kKeyCapsLock), 0);
+        return;
+      default:
+        /* Layer and the overlay controls never become a shortcut key. */
+        return;
+    }
   }
 
   switch (spec.code) {
@@ -2308,7 +2349,9 @@ static void vk_pie_release(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *w
 {
   if (item == 0) {
     vk_close_overlay(vk, wm, win);
-    WM_virtual_keyboard_toggle(wm, win);
+    /* Open, never toggle: tapping the pie's button is how the keyboard is reached, and it must not
+     * close whatever already made it here. */
+    vk_open(wm, win);
     return;
   }
   vk.overlay = VirtualKeyboard::Overlay::Grid;
@@ -2360,9 +2403,18 @@ static void vk_draw_ball_shape(uint pos, const VirtualKeyboard &vk)
   if (r <= 1.0f) {
     return;
   }
-  vk_draw_disc(pos, cx, cy, r, VK_COL_OVERLAY);
-  vk_draw_ring(pos, cx, cy, r, r - 2.5f * vk_scale(), VK_COL_AMBER);
-  vk_draw_caret(pos, cx, cy, r, VK_COL_TEXT);
+  /* A disc in the keyboard's own panel colour, bracketed by a fine ring in the Blender accent. */
+  vk_draw_disc(pos, cx, cy, r, VK_COL_PANEL);
+  vk_draw_ring(pos, cx, cy, r, r - 2.0f * vk_scale(), VK_COL_BLENDER);
+  /* Two rows of three dots read as a keyboard at a glance, and do not fight the ring. */
+  const float key_r = r * 0.13f;
+  const float dx = r * 0.34f;
+  const float dy = r * 0.19f;
+  for (int row = 0; row < 2; row++) {
+    for (int col = -1; col <= 1; col++) {
+      vk_draw_disc(pos, cx + col * dx, cy + (row == 0 ? -dy : dy), key_r, VK_COL_TEXT_DIM);
+    }
+  }
 }
 
 static void vk_pie_shape(uint pos, const VirtualKeyboard &vk)
@@ -2667,6 +2719,13 @@ static void vk_release(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win)
 
   /* A finger that slid off the key it started on cancels, as it does on any keyboard. */
   if (!was_moving && BLI_rcti_isect_pt_v(&vk.keys[index].rect, vk.cursor)) {
+    /* While a slot is waiting, modifiers, Caps and any toggle must reach the capture instead of
+     * turning on here: latching a Ctrl is only useful if the coming key is captured with it, and
+     * the toggle keys themselves can be captured bare. */
+    if (vk.overlay == VirtualKeyboard::Overlay::Editor && vk.capture_slot >= 0) {
+      vk_editor_key(vk, wm, win, spec);
+      return;
+    }
     switch (spec.kind) {
       case VKKind::Close:
         if (vk.overlay == VirtualKeyboard::Overlay::Editor) {
@@ -2931,8 +2990,13 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
           }
           vk.press = VirtualKeyboard::Press::Ball;
           vk_open_pie(vk, win);
+          return true;
         }
-        return true;
+        /* A release belongs to the press that began it. One that started outside the ball -- a box
+         * select, a panel drag, a region resize -- must end in Blender, not be eaten because the
+         * finger lifted over the ball: swallowing the up leaves the operator waiting for a release
+         * that never comes, so it stays branded on the screen until the keyboard is opened. */
+        return (vk.press == VirtualKeyboard::Press::Ball);
       }
 
       if (!open) {
