@@ -32,6 +32,7 @@
  */
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "GHOST_ISystem.hh"
@@ -55,12 +56,18 @@
 
 #include "BLF_api.hh"
 
+#include "BKE_appdir.hh"
 #include "BKE_context.hh"
 #include "BKE_screen.hh"
+
+#include "BLI_fileops.hh"
+#include "BLI_path_utils.hh"
 
 #include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
 #include "GPU_state.hh"
+
+#include "MEM_guardedalloc.h"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -95,6 +102,26 @@ enum class VKKind {
   Layer,
   Close,
   Move,
+
+  /* --- The touch overlay, which shares the same drawing and input pass as the keys. --- */
+
+  /** The floating ball that opens the pie. */
+  Ball,
+  /** The pie's "Keyboard" (code 0) and "Shortcuts" (code 1) spokes. */
+  PieSpoke,
+  /** A tile in the shortcuts grid; `code` is the index into `shortcuts`. */
+  ShortcutTile,
+  /** The "+" tile that ends the grid. */
+  PlusTile,
+  /** The handle the grid is dragged by. */
+  GridMove,
+  /** Editor: the named slot buttons, `code` 0..3. */
+  EditSlot,
+  /** Editor: the Hold toggle. */
+  EditHold,
+  /** Editor: Save / Cancel. */
+  EditSave,
+  EditCancel,
 };
 
 /* Modifier slots, in the order they are shown. */
@@ -387,6 +414,19 @@ struct VKPlacedKey {
 /** Never build a keyboard shorter than this, before the drawable band clamps it. */
 static const float VK_MIN_HEIGHT = 150.0f;
 
+/** A user-defined shortcut: a name, an optional Hold, and up to four key slots. */
+struct VKShortcut {
+  char name[64] = "";
+  bool hold = false;
+  /** One #GHOST_TKey code and the modifier mask (a `VK_MOD_*` bitfield) held with it, per slot. */
+  int keys[4] = {};
+  uint8_t mods[4] = {};
+  int keys_num = 0;
+};
+
+/** How many tiles the grid holds before refusing new ones. */
+static const int VK_GRID_LIMIT = 32;
+
 struct VirtualKeyboard {
   bool open = false;
   wmWindow *win = nullptr;
@@ -437,15 +477,78 @@ struct VirtualKeyboard {
   int pressed = -1;
   bool moving = false;
 
+  /** Which control owns the current press: the keyboard, the overlay, the ball, or nothing. */
+  enum class Press : uint8_t {
+    None,
+    Key,
+    UI,
+    Ball,
+  };
+  Press press = Press::None;
+
   /** Last pointer position, in window coordinates. */
   int cursor[2] = {0, 0};
   /** Last position that was outside the keyboard, which injected events are attributed to. */
   int pinned[2] = {0, 0};
   int drag_prev[2] = {0, 0};
+
+  /* --- Floating ball --- */
+  /** Window rect of the tap target that opens the pie. */
+  rcti ball_rect = {0, 0, 0, 0};
+
+  /* --- Pie, grid and editor --- */
+  /** What the ball opened, if anything. */
+  enum class Overlay : uint8_t {
+    None,
+    Pie,
+    Grid,
+    Editor,
+  };
+  Overlay overlay = Overlay::None;
+
+  /** Pie center, window coordinates. */
+  float pie_c[2] = {0.0f, 0.0f};
+
+  /** Grid panel, window coordinates. */
+  rcti grid_rect = {0, 0, 0, 0};
+  bool grid_placed = false;
+
+  /** The overlay's interactive controls, rebuilt whenever the overlay re-lays out. */
+  struct UIKey {
+    rcti rect;
+    VKKind kind;
+    int code;
+  };
+  Vector<UIKey> ui_keys;
+  int ui_pressed = 0;
+  bool ui_moving = false;
+  int ui_drag_prev[2] = {0, 0};
+
+  Vector<VKShortcut> shortcuts;
+  bool shortcuts_loaded = false;
+  /** Bit per shortcut that is held down because it is a Hold tile that was tapped on. */
+  uint32_t held_mask = 0;
+
+  /** The shortcut being edited, and whether it is new (-1) or replacing an existing one. */
+  VKShortcut edit = {};
+  int edit_index = -1;
+  /** Editor slot currently waiting for a key to be captured, -1 when none. */
+  int capture_slot = -1;
+  rcti edit_rect = {0, 0, 0, 0};
 };
 
 /* Android hands out exactly one window, and a second keyboard would have nothing to attach to. */
 static VirtualKeyboard g_vk;
+
+/* The overlay functions are defined later, so the drawing and key paths declare what they call. */
+static void vk_editor_cancel(wmWindowManager *wm, wmWindow *win);
+static void vk_editor_key(VirtualKeyboard &vk,
+                          wmWindowManager *wm,
+                          wmWindow *win,
+                          const VKKeySpec &spec);
+static void vk_overlay_draw(const wmWindow *win);
+static void vk_overlay_place(VirtualKeyboard &vk, const wmWindow *win);
+static void vk_release_held_shortcuts(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win);
 
 /** The interface resolution scale, which the keyboard sizes its text and its bar against. */
 static float vk_scale()
@@ -1011,11 +1114,16 @@ static void vk_status_text(const VirtualKeyboard &vk,
 static void vk_draw_cb(const wmWindow *win, void * /*customdata*/)
 {
   VirtualKeyboard &vk = g_vk;
+  /* The ball, the pie and the shortcuts live here and are painted whether the keyboard is up or
+   * not, so they get their own pass on the way in as well as on the way out. */
+  vk_overlay_place(vk, win);
   if (!vk.open || vk.win != win) {
+    vk_overlay_draw(win);
     return;
   }
   vk_ensure_layout(vk, const_cast<wmWindow *>(win));
   if (vk.keys.is_empty()) {
+    vk_overlay_draw(win);
     return;
   }
 
@@ -1110,6 +1218,8 @@ static void vk_draw_cb(const wmWindow *win, void * /*customdata*/)
 
   BLF_batch_draw_flush();
   GPU_blend(GPU_BLEND_NONE);
+
+  vk_overlay_draw(win);
 }
 
 /** \} */
@@ -1259,6 +1369,13 @@ static void vk_release_all_mods(VirtualKeyboard &vk, wmWindowManager *wm, wmWind
  */
 static void vk_send_key(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win, const VKKeySpec &spec)
 {
+  /* While the shortcut editor is up the keys become its input: letters go into the name, the
+   * slots capture a combination, and Enter/Esc leave. Nothing is sent to the scene in that state. */
+  if (vk.overlay == VirtualKeyboard::Overlay::Editor) {
+    vk_editor_key(vk, wm, win, spec);
+    return;
+  }
+
   /* A key event inherits the cursor position, and that is what decides which editor the shortcut
    * reaches. Attribute it to the last place the user actually touched, never to the keyboard. */
   int target[2];
@@ -1306,12 +1423,12 @@ static void vk_close(wmWindowManager *wm, wmWindow *win)
     return;
   }
   vk_release_all_mods(vk, wm, win);
-  if (vk.draw_handle != nullptr) {
-    WM_draw_cb_exit(vk.win, vk.draw_handle);
-    vk.draw_handle = nullptr;
-  }
+  vk_release_held_shortcuts(vk, wm, win);
+  /* The draw callback stays registered: it paints the floating ball and the shortcut overlay even
+   * while the keyboard is closed, so closing the keyboard only stops drawing the board. */
   vk.open = false;
-  vk.win = nullptr;
+  /* The window is kept so the floating ball and its overlays can still be reached while the board
+   * is down: they are painted without the keyboard and answer their own taps. */
   /* Caps holds for as long as the keyboard is up, and no longer: coming back to a keyboard that
    * types capitals because of a tap from an earlier session would be a puzzle with no clue on
    * screen until the first letter arrives wrong. */
@@ -1347,7 +1464,12 @@ static void vk_open(wmWindowManager *wm, wmWindow *win)
   vk.moving = false;
   copy_v2_v2_int(vk.pinned, win->runtime->eventstate->xy);
   vk_build_layout(vk, win);
-  vk.draw_handle = WM_draw_cb_activate(win, vk_draw_cb, nullptr);
+  if (vk.draw_handle == nullptr) {
+    /* One callback for them all -- keyboard, ball and overlays -- registered on the window and
+     * kept until the window dies. */
+    vk.win = win;
+    vk.draw_handle = WM_draw_cb_activate(win, vk_draw_cb, nullptr);
+  }
   vk_tag_redraw(win);
 }
 
@@ -1393,17 +1515,1126 @@ void WM_virtual_keyboard_toggle(wmWindowManager *wm, wmWindow *win)
 
 void wm_virtual_keyboard_window_close(wmWindow *win)
 {
-  if (g_vk.open && g_vk.win == win) {
+  if (g_vk.win == win) {
     /* The draw callback belongs to a window that is going away, so drop it without touching it. */
     g_vk.draw_handle = nullptr;
-    g_vk.open = false;
+    if (g_vk.open) {
+      g_vk.open = false;
+      /* The window is going away and takes its event state with it, so there is nothing to
+       * release the modifiers or a held shortcut to. */
+      g_vk.mods = 0;
+      g_vk.keys.clear();
+      g_vk.text_edit = nullptr;
+    }
     g_vk.win = nullptr;
-    /* The window is going away and takes its event state with it, so there is nothing to
-     * release the modifiers to. */
-    g_vk.mods = 0;
-    g_vk.keys.clear();
-    g_vk.text_edit = nullptr;
   }
+  /* Everything else belongs to this window: the ball's callback dies with it in any case. */
+  g_vk.overlay = VirtualKeyboard::Overlay::None;
+  g_vk.held_mask = 0;
+  g_vk.capture_slot = -1;
+  g_vk.ui_keys.clear();
+  g_vk.press = VirtualKeyboard::Press::None;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Touch overlays: ball, pie and shortcuts
+ *
+ * Around the keyboard is a small shell of touch surfacing:
+ *
+ * - A floating ball hangs just below the viewport's navigation gizmo column. It is the only
+ *   door to everything here, and it is always drawn, whether or not the keyboard is up.
+ * - A tap on it opens a two-item pie centred in the viewport: Keyboard, which toggles the board,
+ *   and Shortcuts, which brings up the grid.
+ * - The grid holds the user's own shortcuts (a name, an optional Hold, up to four captured keys)
+ *   and a "+" tile that starts the editor.
+ * - The editor reuses the keyboard while it is up: letters type the name, a slot captures the
+ *   next combination, and Enter/Esc leave. Only Enter, Delete and Esc are hard-coded; everything
+ *   a tile does comes from the user.
+ *
+ * Shortcuts are saved to `shortcut_grid.ini` in the user config folder.
+ * \{ */
+
+static const float VK_COL_OVERLAY[4] = {0.12f, 0.12f, 0.12f, 0.95f};
+static const float VK_COL_AMBER[4] = {0.99f, 0.75f, 0.02f, 1.0f};
+static const float VK_COL_OK[4] = {0.24f, 0.56f, 0.28f, 1.0f};
+static const float VK_COL_BAD[4] = {0.62f, 0.24f, 0.24f, 1.0f};
+
+static void vk_disc_verts(uint pos, float cx, float cy, float r, int segments)
+{
+  immBegin(GPU_PRIM_TRIS, uint(segments * 3));
+  for (int i = 0; i < segments; i++) {
+    const float a0 = float(M_PI * 2.0) * (float(i) / float(segments));
+    const float a1 = float(M_PI * 2.0) * (float(i + 1) / float(segments));
+    immVertex2f(pos, cx, cy);
+    immVertex2f(pos, cx + cosf(a0) * r, cy + sinf(a0) * r);
+    immVertex2f(pos, cx + cosf(a1) * r, cy + sinf(a1) * r);
+  }
+  immEnd();
+}
+
+static void vk_draw_disc(uint pos, float cx, float cy, float r, const float color[4])
+{
+  immUniformColor4fv(color);
+  vk_disc_verts(pos, cx, cy, r, 30);
+}
+
+/* A section of a circular ring between two radii, as a triangle strip's worth of quads. */
+static void vk_ring_verts(
+    uint pos, float cx, float cy, float r_out, float r_in, float a0, float a1, int segments)
+{
+  immBegin(GPU_PRIM_TRIS, uint(segments * 6));
+  for (int i = 0; i < segments; i++) {
+    const float ta = a0 + (a1 - a0) * (float(i) / float(segments));
+    const float tb = a0 + (a1 - a0) * (float(i + 1) / float(segments));
+    immVertex2f(pos, cx + cosf(ta) * r_out, cy + sinf(ta) * r_out);
+    immVertex2f(pos, cx + cosf(ta) * r_in, cy + sinf(ta) * r_in);
+    immVertex2f(pos, cx + cosf(tb) * r_in, cy + sinf(tb) * r_in);
+    immVertex2f(pos, cx + cosf(ta) * r_out, cy + sinf(ta) * r_out);
+    immVertex2f(pos, cx + cosf(tb) * r_in, cy + sinf(tb) * r_in);
+    immVertex2f(pos, cx + cosf(tb) * r_out, cy + sinf(tb) * r_out);
+  }
+  immEnd();
+}
+
+static void vk_draw_ring(
+    uint pos, float cx, float cy, float r_out, float r_in, const float color[4])
+{
+  if (r_out <= r_in) {
+    return;
+  }
+  immUniformColor4fv(color);
+  vk_ring_verts(pos, cx, cy, r_out, r_in, 0.0f, float(M_PI * 2.0), 48);
+}
+
+static void vk_draw_caret(uint pos, float cx, float cy, float r, const float color[4])
+{
+  immUniformColor4fv(color);
+  immBegin(GPU_PRIM_TRIS, 3);
+  immVertex2f(pos, cx, cy - r * 0.45f);
+  immVertex2f(pos, cx - r * 0.35f, cy + r * 0.25f);
+  immVertex2f(pos, cx + r * 0.35f, cy + r * 0.25f);
+  immEnd();
+}
+
+static void vk_draw_text_centered(
+    int font_id, float cx, float cy, const char *text, float size, const float color[4])
+{
+  if (text == nullptr || text[0] == '\0') {
+    return;
+  }
+  BLF_size(font_id, size);
+  BLF_color4fv(font_id, color);
+  const size_t len = strlen(text);
+  const float w = BLF_width(font_id, text, len);
+  BLF_position(font_id, cx - w * 0.5f, cy - size * 0.5f, 0.0f);
+  BLF_draw(font_id, text, len);
+}
+
+/* A label shrunk from the tail, whole code points at a time, until it fits a width. */
+static void vk_draw_text_fit(int font_id,
+                             float cx,
+                             float cy,
+                             float max_w,
+                             const char *text,
+                             float size,
+                             const float color[4])
+{
+  if (text == nullptr || text[0] == '\0') {
+    return;
+  }
+  char buf[64];
+  BLI_strncpy(buf, text, sizeof(buf));
+  BLF_size(font_id, size);
+  while (buf[0] != '\0' && BLF_width(font_id, buf, strlen(buf)) > max_w) {
+    size_t n = strlen(buf);
+    while (n > 0) {
+      n--;
+      if ((buf[n] & 0xC0) != 0x80) {
+        break;
+      }
+    }
+    buf[n] = '\0';
+  }
+  if (buf[0] == '\0') {
+    return;
+  }
+  BLF_color4fv(font_id, color);
+  const size_t len = strlen(buf);
+  const float w = BLF_width(font_id, buf, len);
+  BLF_position(font_id, cx - w * 0.5f, cy - size * 0.5f, 0.0f);
+  BLF_draw(font_id, buf, len);
+}
+
+/** The 3D viewport's window-region rectangle, or false when there is no viewport. */
+static bool vk_view3d_window_rect(const wmWindow *win, rcti *r_rect)
+{
+  const bScreen *screen = WM_window_get_active_screen(const_cast<wmWindow *>(win));
+  if (screen == nullptr) {
+    return false;
+  }
+  for (const ScrArea &area : screen->areabase) {
+    if (area.spacetype != SPACE_VIEW3D) {
+      continue;
+    }
+    for (const ARegion &region : area.regionbase) {
+      if (region.regiontype != RGN_TYPE_WINDOW) {
+        continue;
+      }
+      if (region.runtime->visible) {
+        *r_rect = region.winrct;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/* --- Placement ------------------------------------------------------ */
+
+static void vk_place_ball(VirtualKeyboard &vk, const wmWindow *win)
+{
+  const float scale = vk_scale();
+  const float r = 26.0f * scale;
+  rcti rect;
+  if (!vk_view3d_window_rect(win, &rect)) {
+    rect.xmin = 0;
+    rect.xmax = win->sizex;
+    rect.ymin = 0;
+    rect.ymax = win->sizey;
+  }
+  /* The navigation column runs down the right edge of the region from its top
+   * (view3d_gizmo_navigate.cc); the ball hangs just below where a full column ends. */
+  const float cx = float(rect.xmax) - 22.5f * scale;
+  const float column_end = max_ff(float(rect.ymin) + r * 2.0f, float(rect.ymax) - 230.0f * scale);
+  const float cy = column_end - 8.0f * scale - r;
+  vk.ball_rect.xmin = int(cx - r);
+  vk.ball_rect.xmax = int(cx + r);
+  vk.ball_rect.ymin = int(cy - r);
+  vk.ball_rect.ymax = int(cy + r);
+}
+
+static float vk_pie_radius()
+{
+  return 150.0f * vk_scale();
+}
+
+static float vk_pie_inner()
+{
+  return 46.0f * vk_scale();
+}
+
+static void vk_place_pie(VirtualKeyboard &vk, const wmWindow *win)
+{
+  rcti rect;
+  if (!vk_view3d_window_rect(win, &rect)) {
+    rect.xmin = 0;
+    rect.xmax = win->sizex;
+    rect.ymin = 0;
+    rect.ymax = win->sizey;
+  }
+  vk.pie_c[0] = float(BLI_rcti_cent_x(&rect));
+  vk.pie_c[1] = float(BLI_rcti_cent_y(&rect));
+}
+
+/** Which pie spoke owns this point: 0 right (Keyboard), 1 left (Shortcuts), -1 nowhere. */
+static int vk_pie_item_at(const VirtualKeyboard &vk, const int xy[2])
+{
+  const float dx = float(xy[0]) - vk.pie_c[0];
+  const float dy = float(xy[1]) - vk.pie_c[1];
+  const float dist2 = dx * dx + dy * dy;
+  const float inner = vk_pie_inner();
+  const float r = vk_pie_radius();
+  if (dist2 < inner * inner || dist2 > r * r) {
+    return -1;
+  }
+  return (dx >= 0.0f) ? 0 : 1;
+}
+
+/* The label a slot shows again after a restart, looked up from the key tables.
+ * Returns null when the code is not one of the on-screen keys. */
+static const char *vk_ghost_key_label(int code)
+{
+  static const VKRow *const blocks[] = {vk_main_rows, vk_pad_rows, vk_number_rows};
+  const int blocks_num[] = {
+      int(ARRAY_SIZE(vk_main_rows)),
+      int(ARRAY_SIZE(vk_pad_rows)),
+      int(ARRAY_SIZE(vk_number_rows)),
+  };
+  for (int b = 0; b < int(ARRAY_SIZE(blocks)); b++) {
+    for (int r = 0; r < blocks_num[b]; r++) {
+      const VKKeySpec *row = blocks[b][r].keys;
+      for (int k = 0; k < blocks[b][r].keys_num; k++) {
+        if (row[k].kind == VKKind::Key && int(row[k].code) == code) {
+          return row[k].label;
+        }
+      }
+    }
+  }
+  return nullptr;
+}
+
+static void vk_slot_label(const VKShortcut &sc, int slot, char *buf, size_t size)
+{
+  buf[0] = '\0';
+  if (slot < 0 || slot >= sc.keys_num) {
+    return;
+  }
+  size_t off = 0;
+  for (int m = 0; m < VK_MOD_NUM; m++) {
+    if (sc.mods[slot] & (1 << m)) {
+      if (off != 0) {
+        off += BLI_strncpy_rlen(buf + off, "+", size - off);
+      }
+      off += BLI_strncpy_rlen(buf + off, vk_mod_name(m), size - off);
+    }
+  }
+  if (off != 0) {
+    off += BLI_strncpy_rlen(buf + off, "+", size - off);
+  }
+  const char *label = vk_ghost_key_label(sc.keys[slot]);
+  BLI_strncpy(buf + off, (label != nullptr) ? label : "?", size - off);
+}
+
+static int vk_ui_key_at(const VirtualKeyboard &vk, const int xy[2])
+{
+  for (const int i : vk.ui_keys.index_range()) {
+    if (BLI_rcti_isect_pt_v(&vk.ui_keys[i].rect, xy)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/** Lay the shortcuts out as a movable panel: handle, a tile per shortcut, then the "+". */
+static void vk_grid_place(VirtualKeyboard &vk, const wmWindow *win)
+{
+  const float scale = vk_scale();
+  const int pad = int(10.0f * scale);
+  const int gap = int(8.0f * scale);
+  const int bar_h = int(26.0f * scale);
+  const int tile = int(74.0f * scale);
+  constexpr int cols = 4;
+  const int count = int(vk.shortcuts.size()) + 1;
+  const int rows = (count + cols - 1) / cols;
+  const int panel_w = pad * 2 + cols * tile + (cols - 1) * gap;
+  const int panel_h = pad * 2 + bar_h + rows * tile + (rows - 1) * gap;
+
+  if (!vk.grid_placed) {
+    int band_bottom, band_top;
+    vk_drawable_band(win, &band_bottom, &band_top);
+    vk.grid_rect.xmin = (win->sizex - panel_w) / 2;
+    vk.grid_rect.xmax = vk.grid_rect.xmin + panel_w;
+    /* First placement sits it just above the status bar, out of the way of the ball. */
+    vk.grid_rect.ymin = band_bottom + int(12.0f * scale);
+    vk.grid_rect.ymax = vk.grid_rect.ymin + panel_h;
+    vk.grid_placed = true;
+  }
+  else {
+    /* A rotation moved the window around the panel: keep it reachable, where the user left it. */
+    vk.grid_rect.xmin = clamp_i(vk.grid_rect.xmin, 0, win->sizex - panel_w);
+    vk.grid_rect.ymin = clamp_i(vk.grid_rect.ymin, 0, win->sizey - panel_h);
+    vk.grid_rect.xmax = vk.grid_rect.xmin + panel_w;
+    vk.grid_rect.ymax = vk.grid_rect.ymin + panel_h;
+  }
+
+  vk.ui_keys.clear();
+  {
+    VirtualKeyboard::UIKey key;
+    key.kind = VKKind::GridMove;
+    key.code = 0;
+    key.rect.xmin = vk.grid_rect.xmin + pad;
+    key.rect.xmax = key.rect.xmin + bar_h;
+    key.rect.ymin = vk.grid_rect.ymin + pad;
+    key.rect.ymax = key.rect.ymin + bar_h;
+    vk.ui_keys.append(key);
+  }
+  for (int i = 0; i < count; i++) {
+    const int col = i % cols;
+    const int row = i / cols;
+    VirtualKeyboard::UIKey key;
+    key.rect.xmin = vk.grid_rect.xmin + pad + col * (tile + gap);
+    key.rect.xmax = key.rect.xmin + tile;
+    key.rect.ymin = vk.grid_rect.ymin + pad + bar_h + gap + row * (tile + gap);
+    key.rect.ymax = key.rect.ymin + tile;
+    if (i < int(vk.shortcuts.size())) {
+      key.kind = VKKind::ShortcutTile;
+      key.code = i;
+    }
+    else {
+      key.kind = VKKind::PlusTile;
+      key.code = 0;
+    }
+    vk.ui_keys.append(key);
+  }
+}
+
+/* The editor panel occupies the strip above the keyboard, which has to be open for it to type. */
+static void vk_editor_place(VirtualKeyboard &vk, const wmWindow *win)
+{
+  const float scale = vk_scale();
+  const int pad = int(10.0f * scale);
+  const int gap = int(8.0f * scale);
+  const int row_h = int(42.0f * scale);
+  const int panel_w = int(min_ff(430.0f * scale, float(win->sizex) - 16.0f * scale));
+  const int panel_h = pad * 2 + row_h * 4 + gap * 3;
+
+  const int bottom = vk.open ? vk.rect.ymax + gap : int(0.8f * float(win->sizey));
+  vk.edit_rect.xmin = (win->sizex - panel_w) / 2;
+  vk.edit_rect.xmax = vk.edit_rect.xmin + panel_w;
+  vk.edit_rect.ymin = max_ii(0, bottom);
+  vk.edit_rect.ymax = vk.edit_rect.ymin + panel_h;
+  if (vk.edit_rect.ymax > win->sizey) {
+    vk.edit_rect.ymin = max_ii(0, win->sizey - panel_h);
+    vk.edit_rect.ymax = vk.edit_rect.ymin + panel_h;
+  }
+
+  vk.ui_keys.clear();
+  int y = vk.edit_rect.ymin + pad;
+  /* Save and Cancel along the bottom row. */
+  const int half_w = (panel_w - pad * 2 - gap) / 2;
+  for (int which = 0; which < 2; which++) {
+    VirtualKeyboard::UIKey key;
+    key.kind = (which == 0) ? VKKind::EditSave : VKKind::EditCancel;
+    key.code = 0;
+    key.rect.xmin = vk.edit_rect.xmin + pad + which * (half_w + gap);
+    key.rect.xmax = key.rect.xmin + half_w;
+    key.rect.ymin = y;
+    key.rect.ymax = y + row_h;
+    vk.ui_keys.append(key);
+  }
+  y += row_h + gap;
+  /* Hold toggle. */
+  {
+    VirtualKeyboard::UIKey key;
+    key.kind = VKKind::EditHold;
+    key.code = 0;
+    key.rect.xmin = vk.edit_rect.xmin + pad;
+    key.rect.xmax = key.rect.xmin + half_w;
+    key.rect.ymin = y;
+    key.rect.ymax = y + row_h;
+    vk.ui_keys.append(key);
+  }
+  y += row_h + gap;
+  /* The four slots. */
+  const int slot_w = (panel_w - pad * 2 - gap * 3) / 4;
+  for (int s = 0; s < 4; s++) {
+    VirtualKeyboard::UIKey key;
+    key.kind = VKKind::EditSlot;
+    key.code = s;
+    key.rect.xmin = vk.edit_rect.xmin + pad + s * (slot_w + gap);
+    key.rect.xmax = key.rect.xmin + slot_w;
+    key.rect.ymin = y;
+    key.rect.ymax = y + row_h;
+    vk.ui_keys.append(key);
+  }
+}
+
+static void vk_overlay_place(VirtualKeyboard &vk, const wmWindow *win)
+{
+  vk_shortcuts_ensure_loaded(vk);
+  vk_place_ball(vk, win);
+  switch (vk.overlay) {
+    case VirtualKeyboard::Overlay::Pie:
+      vk_place_pie(vk, win);
+      break;
+    case VirtualKeyboard::Overlay::Grid:
+      vk_grid_place(vk, win);
+      break;
+    case VirtualKeyboard::Overlay::Editor:
+      vk_editor_place(vk, win);
+      break;
+    default:
+      break;
+  }
+}
+
+/* --- Persistence ---------------------------------------------------- */
+
+static std::string vk_config_file_path()
+{
+  std::optional<std::string> dir = BKE_appdir_folder_id_create(BLENDER_USER_CONFIG, nullptr);
+  if (!dir) {
+    return "";
+  }
+  char path[1024];
+  BLI_path_join(path, sizeof(path), dir->c_str(), "shortcut_grid.ini");
+  return std::string(path);
+}
+
+/* Reads one "name|hold|code.mod;code.mod;..." line into a shortcut. */
+static bool vk_shortcut_parse_line(char *line, VKShortcut &r_sc)
+{
+  char *sep = strchr(line, '|');
+  if (sep == nullptr) {
+    return false;
+  }
+  *sep = '\0';
+  BLI_strncpy(r_sc.name, line, sizeof(r_sc.name));
+  char *second = sep + 1;
+  sep = strchr(second, '|');
+  if (sep == nullptr) {
+    return false;
+  }
+  *sep = '\0';
+  int hold = 0;
+  if (sscanf(second, "%d", &hold) == 1) {
+    r_sc.hold = (hold != 0);
+  }
+  char *mods = sep + 1;
+  char *save = nullptr;
+  char *tok = strtok_r(mods, ";", &save);
+  while (tok != nullptr && r_sc.keys_num < 4) {
+    int code = 0, mod = 0;
+    if (sscanf(tok, "%d.%d", &code, &mod) == 2 && code != 0) {
+      r_sc.keys[r_sc.keys_num] = code;
+      r_sc.mods[r_sc.keys_num] = uint8_t(mod);
+      r_sc.keys_num++;
+    }
+    tok = strtok_r(nullptr, ";", &save);
+  }
+  return true;
+}
+
+static void vk_shortcuts_load(VirtualKeyboard &vk)
+{
+  const std::string path = vk_config_file_path();
+  if (path.empty() || !BLI_exists(path.c_str())) {
+    return;
+  }
+  size_t size = 0;
+  char *text = BLI_file_read_text_as_mem(path.c_str(), 0, &size);
+  if (text == nullptr) {
+    return;
+  }
+  vk.shortcuts.clear();
+  char *line = text;
+  while (*line != '\0') {
+    char *end = strchr(line, '\n');
+    if (end == nullptr) {
+      end = line + strlen(line);
+    }
+    char save = *end;
+    *end = '\0';
+    char *trim = line;
+    while (*trim == ' ' || *trim == '\t' || *trim == '\r') {
+      trim++;
+    }
+    if (*trim != '\0' && *trim != '#' && vk.shortcuts.size() < VK_GRID_LIMIT) {
+      VKShortcut sc;
+      if (vk_shortcut_parse_line(trim, sc)) {
+        vk.shortcuts.append(sc);
+      }
+    }
+    *end = save;
+    if (*end == '\0') {
+      break;
+    }
+    line = end + 1;
+  }
+  MEM_freeN(text);
+}
+
+static void vk_shortcuts_save(const VirtualKeyboard &vk)
+{
+  const std::string path = vk_config_file_path();
+  if (path.empty()) {
+    return;
+  }
+  FILE *file = BLI_fopen(path.c_str(), "w");
+  if (file == nullptr) {
+    return;
+  }
+  fputs("# Blender touch shortcut grid (built by the on-screen keyboard overlay)\n", file);
+  for (const VKShortcut &sc : vk.shortcuts) {
+    char name[sizeof(sc.name)];
+    BLI_strncpy(name, sc.name, sizeof(name));
+    for (char *p = name; *p; p++) {
+      if (*p == '|' || *p == ';' || *p == '\n') {
+        *p = ' ';
+      }
+    }
+    fprintf(file, "%s|%d|", name, sc.hold ? 1 : 0);
+    for (int i = 0; i < sc.keys_num; i++) {
+      if (i != 0) {
+        fputc(';', file);
+      }
+      fprintf(file, "%d.%d", sc.keys[i], int(sc.mods[i]));
+    }
+    fputc('\n', file);
+  }
+  fclose(file);
+}
+
+static void vk_shortcuts_ensure_loaded(VirtualKeyboard &vk)
+{
+  if (!vk.shortcuts_loaded) {
+    vk.shortcuts_loaded = true;
+    vk_shortcuts_load(vk);
+  }
+}
+
+/* --- Sending shortcuts ---------------------------------------------- */
+
+static void vk_press_mods_mask(wmWindowManager *wm, wmWindow *win, uint8_t mods, bool down)
+{
+  for (int slot = 0; slot < VK_MOD_NUM; slot++) {
+    if (mods & (1 << slot)) {
+      vk_send_ghost_key(wm, win, vk_modifier_ghost_key(slot), nullptr, down);
+    }
+  }
+}
+
+/**
+ * Play a shortcut the way a keyboard would type it.
+ *
+ * A plain tile fires each slot in turn, modifiers and key. A Hold tile is sticky instead: the
+ * first tap presses the whole combination down and leaves it down, and the second lets it go, so
+ * Ctrl can be "on" while the other hand or thumb works the viewport.
+ */
+static void vk_send_shortcut(VirtualKeyboard &vk,
+                             wmWindowManager *wm,
+                             wmWindow *win,
+                             const VKShortcut &sc,
+                             int index)
+{
+  if (sc.keys_num == 0) {
+    return;
+  }
+  /* Aim the injected keys at the last real point, the way the keyboard does. */
+  int target[2];
+  vk_target_position(vk, win, target);
+  copy_v2_v2_int(win->runtime->eventstate->xy, target);
+
+  if (sc.hold && index >= 0 && index < 32) {
+    const uint32_t bit = 1u << uint(index);
+    if (vk.held_mask & bit) {
+      for (int i = sc.keys_num - 1; i >= 0; i--) {
+        vk_press_mods_mask(wm, win, sc.mods[i], false);
+        vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, false);
+      }
+      vk.held_mask &= ~bit;
+    }
+    else {
+      for (int i = 0; i < sc.keys_num; i++) {
+        vk_press_mods_mask(wm, win, sc.mods[i], true);
+        vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, true);
+      }
+      vk.held_mask |= bit;
+    }
+    return;
+  }
+
+  for (int i = 0; i < sc.keys_num; i++) {
+    vk_press_mods_mask(wm, win, sc.mods[i], true);
+    vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, true);
+    vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[i]), nullptr, false);
+    vk_press_mods_mask(wm, win, sc.mods[i], false);
+  }
+}
+
+/* Let any Hold tile that is currently down go, so nothing is left pressed when an overlay closes. */
+static void vk_release_held_shortcuts(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win)
+{
+  for (int i = 0; i < int(vk.shortcuts.size()); i++) {
+    const uint32_t bit = 1u << uint(i);
+    if (!(vk.held_mask & bit)) {
+      continue;
+    }
+    const VKShortcut &sc = vk.shortcuts[i];
+    for (int j = sc.keys_num - 1; j >= 0; j--) {
+      vk_press_mods_mask(wm, win, sc.mods[j], false);
+      vk_send_ghost_key(wm, win, GHOST_TKey(sc.keys[j]), nullptr, false);
+    }
+    vk.held_mask &= ~bit;
+  }
+}
+
+/* --- Overlay actions ------------------------------------------------- */
+
+static void vk_close_overlay(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win)
+{
+  vk_release_held_shortcuts(vk, wm, win);
+  vk.overlay = VirtualKeyboard::Overlay::None;
+  vk.press = VirtualKeyboard::Press::None;
+  vk.ui_pressed = -1;
+  vk.ui_moving = false;
+  vk.capture_slot = -1;
+  vk.ui_keys.clear();
+  vk_tag_redraw(win);
+}
+
+static void vk_open_pie(VirtualKeyboard &vk, wmWindow *win)
+{
+  vk_place_pie(vk, win);
+  vk.overlay = VirtualKeyboard::Overlay::Pie;
+  vk.ui_pressed = -1;
+  vk_tag_redraw(win);
+}
+
+static void vk_editor_type(VirtualKeyboard &vk, const char *utf8, wmWindow *win)
+{
+  const size_t used = strlen(vk.edit.name);
+  const size_t room = sizeof(vk.edit.name) - used - 1;
+  if (room != 0) {
+    BLI_strncpy(vk.edit.name + used, utf8, room + 1);
+  }
+  vk_tag_redraw(win);
+}
+
+static void vk_editor_backspace(VirtualKeyboard &vk, wmWindow *win)
+{
+  size_t n = strlen(vk.edit.name);
+  while (n > 0) {
+    n--;
+    if ((vk.edit.name[n] & 0xC0) != 0x80) {
+      break;
+    }
+  }
+  vk.edit.name[n] = '\0';
+  vk_tag_redraw(win);
+}
+
+static void vk_editor_open(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win)
+{
+  if (vk.edit_index >= 0 && vk.edit_index < int(vk.shortcuts.size())) {
+    vk.edit = vk.shortcuts[vk.edit_index];
+  }
+  vk.overlay = VirtualKeyboard::Overlay::Editor;
+  if (!vk.open) {
+    vk_open(wm, win);
+  }
+  vk_editor_place(vk, win);
+  vk.ui_pressed = -1;
+  vk_tag_redraw(win);
+}
+
+static void vk_editor_save(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win)
+{
+  VKShortcut sc = vk.edit;
+  for (char *p = sc.name; *p; p++) {
+    if (*p == '|' || *p == ';' || *p == '\n') {
+      *p = ' ';
+    }
+  }
+  if (vk.edit_index >= 0 && vk.edit_index < int(vk.shortcuts.size())) {
+    vk.shortcuts[vk.edit_index] = sc;
+  }
+  else if (vk.shortcuts.size() < VK_GRID_LIMIT) {
+    vk.shortcuts.append(sc);
+  }
+  vk_shortcuts_save(vk);
+  vk_release_held_shortcuts(vk, wm, win);
+  if (vk.open) {
+    vk_close(wm, win);
+  }
+  vk.capture_slot = -1;
+  vk.edit = {};
+  vk.edit_index = -1;
+  vk.overlay = VirtualKeyboard::Overlay::Grid;
+  vk_grid_place(vk, win);
+  vk.ui_pressed = -1;
+  vk_tag_redraw(win);
+}
+
+static void vk_editor_cancel(wmWindowManager *wm, wmWindow *win)
+{
+  VirtualKeyboard &vk = g_vk;
+  vk.capture_slot = -1;
+  vk.edit = {};
+  vk.edit_index = -1;
+  vk_release_held_shortcuts(vk, wm, win);
+  if (vk.open) {
+    vk_close(wm, win);
+  }
+  vk.overlay = VirtualKeyboard::Overlay::Grid;
+  vk_grid_place(vk, win);
+  vk.ui_pressed = -1;
+  vk_tag_redraw(win);
+}
+
+/* Keyboard keys become the editor's input while it is up. */
+static void vk_editor_key(VirtualKeyboard &vk,
+                          wmWindowManager *wm,
+                          wmWindow *win,
+                          const VKKeySpec &spec)
+{
+  if (spec.kind != VKKind::Key) {
+    return;
+  }
+
+  /* A waiting slot captures the next key with whatever modifiers are latched, so a combination
+   * like Ctrl+Shift+C becomes one slot. */
+  if (vk.capture_slot >= 0) {
+    vk.edit.keys[vk.capture_slot] = int(spec.code);
+    vk.edit.mods[vk.capture_slot] = vk.mods;
+    vk.edit.keys_num = 0;
+    for (int s = 0; s < 4; s++) {
+      if (vk.edit.keys[s] != 0) {
+        vk.edit.keys_num = s + 1;
+      }
+    }
+    vk.capture_slot = -1;
+    vk_tag_redraw(win);
+    return;
+  }
+
+  switch (spec.code) {
+    case GHOST_kKeyEnter:
+      vk_editor_save(vk, wm, win);
+      return;
+    case GHOST_kKeyEsc:
+      vk_editor_cancel(wm, win);
+      return;
+    case GHOST_kKeyBackSpace:
+    case GHOST_kKeyDelete:
+      vk_editor_backspace(vk, win);
+      return;
+    default:
+      break;
+  }
+
+  if (spec.utf8 != nullptr) {
+    const char *ch = (spec.utf8_shift != nullptr && vk_shift_for_key(vk, spec)) ? spec.utf8_shift :
+                                                                                  spec.utf8;
+    vk_editor_type(vk, ch, win);
+  }
+}
+
+/* One pie spoke chosen: right gives the keyboard, left the grid. */
+static void vk_pie_release(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win, int item)
+{
+  if (item == 0) {
+    vk_close_overlay(vk, wm, win);
+    WM_virtual_keyboard_toggle(wm, win);
+    return;
+  }
+  vk.overlay = VirtualKeyboard::Overlay::Grid;
+  vk_grid_place(vk, win);
+  vk.ui_pressed = -1;
+  vk_tag_redraw(win);
+}
+
+static void vk_dispatch_ui(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win, int index)
+{
+  const VirtualKeyboard::UIKey &key = vk.ui_keys[index];
+  switch (key.kind) {
+    case VKKind::GridMove:
+      break;
+    case VKKind::ShortcutTile:
+      vk_send_shortcut(vk, wm, win, vk.shortcuts[key.code], key.code);
+      break;
+    case VKKind::PlusTile:
+      vk.edit_index = -1;
+      vk.edit = {};
+      vk_editor_open(vk, wm, win);
+      break;
+    case VKKind::EditSlot:
+      vk.capture_slot = (vk.capture_slot == key.code) ? -1 : key.code;
+      vk_tag_redraw(win);
+      break;
+    case VKKind::EditHold:
+      vk.edit.hold = !vk.edit.hold;
+      vk_tag_redraw(win);
+      break;
+    case VKKind::EditSave:
+      vk_editor_save(vk, wm, win);
+      break;
+    case VKKind::EditCancel:
+      vk_editor_cancel(wm, win);
+      break;
+    default:
+      break;
+  }
+}
+
+/* --- Drawing -------------------------------------------------------- */
+
+static void vk_draw_ball_shape(uint pos, const VirtualKeyboard &vk)
+{
+  const float cx = float(BLI_rcti_cent_x(&vk.ball_rect));
+  const float cy = float(BLI_rcti_cent_y(&vk.ball_rect));
+  const float r = float(BLI_rcti_size_x(&vk.ball_rect)) * 0.5f;
+  if (r <= 1.0f) {
+    return;
+  }
+  vk_draw_disc(pos, cx, cy, r, VK_COL_OVERLAY);
+  vk_draw_ring(pos, cx, cy, r, r - 2.5f * vk_scale(), VK_COL_AMBER);
+  vk_draw_caret(pos, cx, cy, r, VK_COL_TEXT);
+}
+
+static void vk_pie_shape(uint pos, const VirtualKeyboard &vk)
+{
+  const float cx = vk.pie_c[0];
+  const float cy = vk.pie_c[1];
+  const float r = vk_pie_radius();
+  const float inner = vk_pie_inner();
+
+  vk_draw_ring(pos, cx, cy, r, inner, VK_COL_OVERLAY);
+  /* Right spoke: Keyboard. Left spoke: Shortcuts. */
+  for (int item = 0; item < 2; item++) {
+    const float a0 = float(M_PI) * (item == 0 ? -0.5f : 0.5f);
+    const float a1 = float(M_PI) * (item == 0 ? 0.5f : 1.5f);
+    const float *color = (vk.ui_pressed == item) ? VK_COL_CAP_PRESS : VK_COL_CAP_MOD;
+    immUniformColor4fv(color);
+    vk_ring_verts(pos, cx, cy, r, inner, a0, a1, 16);
+  }
+  vk_draw_disc(pos, cx, cy, inner - 2.0f * vk_scale(), VK_COL_PANEL);
+  vk_draw_ring(pos, cx, cy, inner, inner - 2.0f * vk_scale(), VK_COL_AMBER);
+}
+
+static void vk_pie_labels(int font_id, const VirtualKeyboard &vk)
+{
+  const float scale = vk_scale();
+  const float label_r = vk_pie_radius() * 0.72f;
+  vk_draw_text_centered(font_id, vk.pie_c[0] + label_r, vk.pie_c[1], "Keyboard", 14.0f * scale,
+                        VK_COL_TEXT);
+  vk_draw_text_centered(
+      font_id, vk.pie_c[0] - label_r, vk.pie_c[1], "Shortcuts", 14.0f * scale, VK_COL_TEXT);
+}
+
+static void vk_grid_shape(uint pos, const VirtualKeyboard &vk)
+{
+  const float scale = vk_scale();
+  const float pad = 10.0f * scale;
+  const float bar_h = 26.0f * scale;
+
+  rctf panel;
+  BLI_rctf_rcti_copy(&panel, &vk.grid_rect);
+  vk_draw_round_rect(pos, panel, 14.0f * scale, VK_COL_OVERLAY);
+
+  rctf bar = panel;
+  bar.ymax = bar.ymin + bar_h;
+  vk_draw_rect(pos, bar, VK_COL_CAP_MOD);
+
+  rctf handle;
+  handle.xmin = panel.xmin + pad;
+  handle.xmax = handle.xmin + bar_h;
+  handle.ymin = panel.ymin + pad;
+  handle.ymax = handle.ymin + bar_h;
+  const bool handle_hot = (vk.ui_pressed == 0);
+  vk_draw_round_rect(pos, handle, 6.0f * scale,
+                     handle_hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOVE);
+
+  for (const int i : vk.ui_keys.index_range()) {
+    if (i == 0) {
+      continue;
+    }
+    const VirtualKeyboard::UIKey &key = vk.ui_keys[i];
+    const bool hot = (i == vk.ui_pressed);
+    rctf cap;
+    BLI_rctf_rcti_copy(&cap, &key.rect);
+    const float radius = 8.0f * scale;
+
+    if (key.kind == VKKind::ShortcutTile && (vk.held_mask & (1u << uint(key.code)))) {
+      /* A tile that is held down right now wears an amber frame. */
+      rctf out = cap;
+      out.xmin -= 2.0f * scale;
+      out.xmax += 2.0f * scale;
+      out.ymin -= 2.0f * scale;
+      out.ymax += 2.0f * scale;
+      vk_draw_round_rect(pos, out, radius, VK_COL_AMBER);
+      cap.xmin += 2.0f * scale;
+      cap.xmax -= 2.0f * scale;
+      cap.ymin += 2.0f * scale;
+      cap.ymax -= 2.0f * scale;
+    }
+
+    const float *color = (key.kind == VKKind::PlusTile) ?
+                             (hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOVE) :
+                             (hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOD);
+    vk_draw_round_rect(pos, cap, radius, color);
+  }
+}
+
+static void vk_grid_labels(int font_id, const VirtualKeyboard &vk)
+{
+  const float scale = vk_scale();
+  const float size = 11.0f * scale;
+  vk_draw_text_centered(font_id,
+                        float(BLI_rcti_cent_x(&vk.ui_keys[0].rect)),
+                        float(BLI_rcti_cent_y(&vk.ui_keys[0].rect)),
+                        "↕",
+                        size,
+                        VK_COL_TEXT_DIM);
+
+  for (const int i : vk.ui_keys.index_range()) {
+    if (i == 0) {
+      continue;
+    }
+    const VirtualKeyboard::UIKey &key = vk.ui_keys[i];
+    const float cx = float(BLI_rcti_cent_x(&key.rect));
+    const float cy = float(BLI_rcti_cent_y(&key.rect));
+    const float box_w = float(BLI_rcti_size_x(&key.rect));
+    if (key.kind == VKKind::PlusTile) {
+      vk_draw_text_centered(font_id, cx, cy, "+", 26.0f * scale, VK_COL_TEXT);
+      continue;
+    }
+    const VKShortcut &sc = vk.shortcuts[key.code];
+    vk_draw_text_fit(font_id, cx, cy + size * 0.55f, box_w * 0.92f, sc.name, size, VK_COL_TEXT);
+    char combo[96];
+    vk_slot_label(sc, 0, combo, sizeof(combo));
+    if (combo[0] != '\0') {
+      vk_draw_text_fit(font_id, cx, cy - size * 0.8f, box_w * 0.92f, combo, size * 0.78f,
+                       VK_COL_TEXT_DIM);
+    }
+  }
+}
+
+static void vk_editor_shape(uint pos, const VirtualKeyboard &vk)
+{
+  const float scale = vk_scale();
+  rctf panel;
+  BLI_rctf_rcti_copy(&panel, &vk.edit_rect);
+  vk_draw_round_rect(pos, panel, 14.0f * scale, VK_COL_OVERLAY);
+
+  for (const int i : vk.ui_keys.index_range()) {
+    const VirtualKeyboard::UIKey &key = vk.ui_keys[i];
+    const bool hot = (i == vk.ui_pressed);
+    const bool capturing = (key.kind == VKKind::EditSlot && key.code == vk.capture_slot);
+    rctf cap;
+    BLI_rctf_rcti_copy(&cap, &key.rect);
+    const float radius = 8.0f * scale;
+
+    if (capturing) {
+      rctf out = cap;
+      out.xmin -= 2.0f * scale;
+      out.xmax += 2.0f * scale;
+      out.ymin -= 2.0f * scale;
+      out.ymax += 2.0f * scale;
+      vk_draw_round_rect(pos, out, radius, VK_COL_AMBER);
+    }
+
+    const float *color = VK_COL_CAP_MOD;
+    switch (key.kind) {
+      case VKKind::EditSave:
+        color = hot ? VK_COL_CAP_PRESS : VK_COL_OK;
+        break;
+      case VKKind::EditCancel:
+        color = hot ? VK_COL_CAP_PRESS : VK_COL_BAD;
+        break;
+      case VKKind::EditHold:
+        color = hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOD;
+        break;
+      case VKKind::EditSlot:
+        color = capturing ? VK_COL_AMBER : (hot ? VK_COL_CAP_PRESS : VK_COL_CAP_MOD);
+        break;
+      default:
+        break;
+    }
+    vk_draw_round_rect(pos, cap, radius, color);
+  }
+}
+
+static void vk_editor_labels(int font_id, const VirtualKeyboard &vk)
+{
+  const float scale = vk_scale();
+  const float pad = 10.0f * scale;
+  const float gap = 8.0f * scale;
+  const float row_h = 42.0f * scale;
+  const float size = 12.0f * scale;
+
+  /* The name row, drawn along the top of the panel. */
+  const float name_y0 = float(vk.edit_rect.ymax) - pad - row_h;
+  const float name_cy = name_y0 + row_h * 0.5f;
+  const float name_x = float(BLI_rcti_cent_x(&vk.edit_rect));
+  if (vk.capture_slot >= 0) {
+    char hint[96];
+    BLI_snprintf(
+        hint, sizeof(hint), "Capture slot %d — tap a key", vk.capture_slot + 1);
+    vk_draw_text_centered(font_id, name_x, name_cy, hint, size, VK_COL_AMBER);
+  }
+  else if (vk.edit.name[0] != '\0') {
+    vk_draw_text_fit(font_id, name_x, name_cy, float(vk.edit_rect.xmax - vk.edit_rect.xmin) - pad * 2,
+                     vk.edit.name, size, VK_COL_TEXT);
+  }
+  else {
+    vk_draw_text_centered(font_id, name_x, name_cy, "Type a name on the keyboard…", size,
+                          VK_COL_TEXT_DIM);
+  }
+
+  for (const int i : vk.ui_keys.index_range()) {
+    const VirtualKeyboard::UIKey &key = vk.ui_keys[i];
+    const float cx = float(BLI_rcti_cent_x(&key.rect));
+    const float cy = float(BLI_rcti_cent_y(&key.rect));
+    switch (key.kind) {
+      case VKKind::EditSlot: {
+        char label[96];
+        if (key.code < vk.edit.keys_num && vk.edit.keys[key.code] != 0) {
+          vk_slot_label(vk.edit, key.code, label, sizeof(label));
+        }
+        else {
+          BLI_snprintf(label, sizeof(label), "slot %d", key.code + 1);
+        }
+        vk_draw_text_centered(font_id, cx, cy, label, size, VK_COL_TEXT);
+        break;
+      }
+      case VKKind::EditHold:
+        vk_draw_text_centered(font_id, cx, cy, vk.edit.hold ? "Hold: ON" : "Hold: off", size,
+                              VK_COL_TEXT);
+        break;
+      case VKKind::EditSave:
+        vk_draw_text_centered(font_id, cx, cy, "Save", size, VK_COL_TEXT_ON);
+        break;
+      case VKKind::EditCancel:
+        vk_draw_text_centered(font_id, cx, cy, "Cancel", size, VK_COL_TEXT_ON);
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+static void vk_overlay_draw(const wmWindow *win)
+{
+  VirtualKeyboard &vk = g_vk;
+  if (vk.win != nullptr && vk.win != win) {
+    return;
+  }
+  /* Placement happens once in the draw callback that owns this pass and once on the way into event
+   * handling, so a tap hits a ball that a recent rotation did not just move. */
+  GPUVertFormat *format = immVertexFormat();
+  const uint pos = GPU_vertformat_attr_add(format, "pos", gpu::VertAttrType::SFLOAT_32_32);
+  GPU_blend(GPU_BLEND_ALPHA);
+  immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
+
+  switch (vk.overlay) {
+    case VirtualKeyboard::Overlay::Pie:
+      vk_pie_shape(pos, vk);
+      break;
+    case VirtualKeyboard::Overlay::Grid:
+      vk_grid_shape(pos, vk);
+      break;
+    case VirtualKeyboard::Overlay::Editor:
+      vk_editor_shape(pos, vk);
+      break;
+    case VirtualKeyboard::Overlay::None:
+      if (!vk.open) {
+        vk_draw_ball_shape(pos, vk);
+      }
+      break;
+  }
+
+  immUnbindProgram();
+
+  const int font_id = BLF_default();
+  switch (vk.overlay) {
+    case VirtualKeyboard::Overlay::Pie:
+      vk_pie_labels(font_id, vk);
+      break;
+    case VirtualKeyboard::Overlay::Grid:
+      vk_grid_labels(font_id, vk);
+      break;
+    case VirtualKeyboard::Overlay::Editor:
+      vk_editor_labels(font_id, vk);
+      break;
+    default:
+      break;
+  }
+
+  BLF_batch_draw_flush();
+  GPU_blend(GPU_BLEND_NONE);
 }
 
 /** \} */
@@ -1437,7 +2668,14 @@ static void vk_release(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win)
   if (!was_moving && BLI_rcti_isect_pt_v(&vk.keys[index].rect, vk.cursor)) {
     switch (spec.kind) {
       case VKKind::Close:
-        vk_close(wm, win);
+        if (vk.overlay == VirtualKeyboard::Overlay::Editor) {
+          /* Closing the keyboard while editing leaves the editor without a way to type: leave
+           * instead, and do not lose the work that was already saved in the grid. */
+          vk_editor_cancel(wm, win);
+        }
+        else {
+          vk_close(wm, win);
+        }
         return;
       case VKKind::Move:
         break;
@@ -1459,6 +2697,9 @@ static void vk_release(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win)
         break;
       case VKKind::Key:
         vk_send_key(vk, wm, win, spec);
+        break;
+      default:
+        /* The overlay control kinds never appear on the board itself. */
         break;
     }
   }
@@ -1502,10 +2743,17 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
                                      const void *customdata)
 {
   VirtualKeyboard &vk = g_vk;
-  if (!vk.open || vk.win != win) {
+  if (vk.win != win) {
     return false;
   }
-  vk_ensure_layout(vk, win);
+  /* Placement on the way in, so a tap cannot land on a ball that a recent rotation just moved. */
+  vk_overlay_place(vk, win);
+  /* The ball and its overlays stay interactive while the keyboard is closed: only the keys need a
+   * layout, which the layout builders fill in as the overlays open. */
+  const bool open = vk.open;
+  if (open) {
+    vk_ensure_layout(vk, win);
+  }
 
   switch (type) {
     case GHOST_kEventCursorMove: {
@@ -1513,6 +2761,28 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
       int xy[2] = {cd->x, cd->y};
       wm_cursor_position_from_ghost_screen_coords(win, &xy[0], &xy[1]);
       copy_v2_v2_int(vk.cursor, xy);
+
+      /* Dragging the grid's handle slides the whole panel with the finger. */
+      if (vk.ui_moving) {
+        const int dx = xy[0] - vk.ui_drag_prev[0];
+        const int dy = xy[1] - vk.ui_drag_prev[1];
+        copy_v2_v2_int(vk.ui_drag_prev, xy);
+        if (dx != 0 || dy != 0) {
+          vk.grid_rect.xmin += dx;
+          vk.grid_rect.xmax += dx;
+          vk.grid_rect.ymin += dy;
+          vk.grid_rect.ymax += dy;
+          vk.grid_placed = true;
+          vk_grid_place(vk, win);
+          vk_tag_redraw(win);
+        }
+        return true;
+      }
+
+      if (!open) {
+        /* Moved without holding anything: the closed keyboard owns nothing to drag. */
+        return false;
+      }
 
       if (vk.moving) {
         const int dy = xy[1] - vk.drag_prev[1];
@@ -1547,8 +2817,8 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
     case GHOST_kEventButtonDown:
     case GHOST_kEventButtonUp: {
       const GHOST_TEventButtonData *bd = static_cast<const GHOST_TEventButtonData *>(customdata);
-      const bool on_panel = BLI_rcti_isect_pt_v(&vk.rect, vk.cursor) &&
-                            !vk_point_is_owned(win, vk.cursor);
+      const bool down = (type == GHOST_kEventButtonDown);
+
       /* Touch: only the left button presses a key.
        *
        * A finger held still arrives as a right click instead --
@@ -1559,9 +2829,118 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
        * to be worse than not having the gesture. A tap toggles a modifier and it stays on, which
        * is all the gesture was ever reaching for. */
       if (bd->button != GHOST_kButtonMaskLeft) {
+        if (vk.overlay != VirtualKeyboard::Overlay::None) {
+          /* An overlay is modal: whatever is sitting on it owns the gesture, and there is
+           * nothing to latch under it. */
+          return true;
+        }
+        const bool on_panel = open && BLI_rcti_isect_pt_v(&vk.rect, vk.cursor) &&
+                              !vk_point_is_owned(win, vk.cursor);
         return on_panel;
       }
-      if (type == GHOST_kEventButtonDown) {
+
+      /* The pie settles on the release, wherever the finger ended up. A tap or a drag that lands
+       * outside the ring, or in the dead centre, cancels it. */
+      if (vk.overlay == VirtualKeyboard::Overlay::Pie) {
+        if (down) {
+          vk.press = VirtualKeyboard::Press::UI;
+          vk.ui_pressed = vk_pie_item_at(vk, vk.cursor);
+        }
+        else {
+          /* The ball's own release is swallowed and never settles the pie: it opened on the
+           * ball's press, and the flash of a ring over a single tap is not a choice. */
+          const bool ours = (vk.press == VirtualKeyboard::Press::UI);
+          vk.press = VirtualKeyboard::Press::None;
+          if (ours) {
+            const int item = vk_pie_item_at(vk, vk.cursor);
+            vk.ui_pressed = -1;
+            if (item >= 0) {
+              vk_pie_release(vk, wm, win, item);
+            }
+            else {
+              vk_close_overlay(vk, wm, win);
+            }
+          }
+        }
+        return true;
+      }
+
+      if (vk.overlay == VirtualKeyboard::Overlay::Grid) {
+        if (down) {
+          const int index = vk_ui_key_at(vk, vk.cursor);
+          if (index < 0) {
+            /* Nowhere on the panel: dismissing is its own action, and the tap that did it must
+             * not fall through to select or draw underneath. */
+            vk_close_overlay(vk, wm, win);
+            return true;
+          }
+          vk.press = VirtualKeyboard::Press::UI;
+          vk.ui_pressed = index;
+          if (vk.ui_keys[index].kind == VKKind::GridMove) {
+            vk.ui_moving = true;
+            copy_v2_v2_int(vk.ui_drag_prev, vk.cursor);
+          }
+        }
+        else {
+          if (vk.press != VirtualKeyboard::Press::UI) {
+            return true;
+          }
+          const int index = vk.ui_pressed;
+          vk.press = VirtualKeyboard::Press::None;
+          vk.ui_pressed = -1;
+          const bool moved = vk.ui_moving;
+          vk.ui_moving = false;
+          /* A drag was not a tap: sliding the panel off the handle must not press a tile too. */
+          if (!moved && index >= 0 && index < int(vk.ui_keys.size()) &&
+              BLI_rcti_isect_pt_v(&vk.ui_keys[index].rect, vk.cursor)) {
+            vk_dispatch_ui(vk, wm, win, index);
+          }
+        }
+        return true;
+      }
+
+      /* The editor floats above the keyboard, whose keys type into it. Its own controls answer
+       * first; anything else falls through to the board below. */
+      if (vk.overlay == VirtualKeyboard::Overlay::Editor) {
+        if (down) {
+          const int index = vk_ui_key_at(vk, vk.cursor);
+          if (index >= 0) {
+            vk.press = VirtualKeyboard::Press::UI;
+            vk.ui_pressed = index;
+            return true;
+          }
+        }
+        else if (vk.press == VirtualKeyboard::Press::UI) {
+          const int index = vk.ui_pressed;
+          vk.press = VirtualKeyboard::Press::None;
+          vk.ui_pressed = -1;
+          if (index >= 0 && index < int(vk.ui_keys.size()) &&
+              BLI_rcti_isect_pt_v(&vk.ui_keys[index].rect, vk.cursor)) {
+            vk_dispatch_ui(vk, wm, win, index);
+          }
+          return true;
+        }
+      }
+
+      if (vk.overlay == VirtualKeyboard::Overlay::None && !open) {
+        /* The ball is the only thing the closed keyboard owns. */
+        if (down) {
+          if (!BLI_rcti_isect_pt_v(&vk.ball_rect, vk.cursor)) {
+            return false;
+          }
+          vk.press = VirtualKeyboard::Press::Ball;
+          vk_open_pie(vk, win);
+        }
+        return true;
+      }
+
+      if (!open) {
+        return false;
+      }
+
+      const bool on_panel = BLI_rcti_isect_pt_v(&vk.rect, vk.cursor) &&
+                            !vk_point_is_owned(win, vk.cursor);
+      if (down) {
         if (!on_panel) {
           return false;
         }
@@ -1579,8 +2958,13 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
       return true;
     }
     case GHOST_kEventTrackpad: {
+      if (vk.overlay != VirtualKeyboard::Overlay::None) {
+        /* An overlay is modal: a two finger gesture over it must not scroll or orbit what is
+         * tucked below it. */
+        return true;
+      }
       /* A two finger gesture that starts on the keyboard must not scroll the editor behind it. */
-      return BLI_rcti_isect_pt_v(&vk.rect, vk.cursor) && !vk_point_is_owned(win, vk.cursor);
+      return open && BLI_rcti_isect_pt_v(&vk.rect, vk.cursor) && !vk_point_is_owned(win, vk.cursor);
     }
     default:
       break;

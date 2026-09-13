@@ -81,24 +81,34 @@ static GHOST_SystemAndroid *android_system()
 static std::vector<std::string> ghost_android_read_launch_args(android_app *app)
 {
   std::vector<std::string> args;
-  if (app == nullptr || app->activity == nullptr || app->activity->internalDataPath == nullptr) {
+  if (app == nullptr || app->activity == nullptr) {
     return args;
   }
-  const std::string path = std::string(app->activity->internalDataPath) + "/blender_args.txt";
-  FILE *file = fopen(path.c_str(), "r");
-  if (file == nullptr) {
-    return args;
+  /* Internal first, then external. The external path lives on /sdcard and lets
+   * us inject launch tweaks (e.g. --debug-value for Eevee debug views) without
+   * root or a debuggable build: just write blender_args.txt there and restart. */
+  const char *data_paths[] = {app->activity->internalDataPath, app->activity->externalDataPath};
+  for (const char *data_path : data_paths) {
+    if (data_path == nullptr) {
+      continue;
+    }
+    const std::string path = std::string(data_path) + "/blender_args.txt";
+    FILE *file = fopen(path.c_str(), "r");
+    if (file == nullptr) {
+      continue;
+    }
+    char token[512];
+    while (fscanf(file, "%511s", token) == 1) {
+      args.push_back(token);
+    }
+    fclose(file);
+    __android_log_print(ANDROID_LOG_INFO,
+                        "blender",
+                        "[BlenderAndroid] %zu launch argument(s) from %s",
+                        args.size(),
+                        path.c_str());
+    break;
   }
-  char token[512];
-  while (fscanf(file, "%511s", token) == 1) {
-    args.push_back(token);
-  }
-  fclose(file);
-  __android_log_print(ANDROID_LOG_INFO,
-                      "blender",
-                      "[BlenderAndroid] %zu launch argument(s) from %s",
-                      args.size(),
-                      path.c_str());
   return args;
 }
 
