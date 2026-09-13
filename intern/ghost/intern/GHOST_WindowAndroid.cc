@@ -75,13 +75,21 @@ static void ghost_android_apply_refresh_rate(ANativeWindow *native_window)
     return;
   }
   hz = std::min(hz, 120);
-  /* ANativeWindow_setFrameRate is only available at runtime (API 30+); it is not exported by
-   * the NDK's libandroid stub (which would fail the -Wl,--no-undefined link). Resolve it via
-   * dlsym against the device's real libandroid.so. */
+  /* ANativeWindow_setFrameRate lives in libnativewindow.so (Android 10+); app processes load it
+   * lazily, so RTLD_DEFAULT misses it. dlopen it explicitly and resolve from its handle. */
   typedef int32_t (*ANativeWindowSetFrameRateFn)(ANativeWindow *, float, int8_t);
-  static const ANativeWindowSetFrameRateFn set_frame_rate =
-      reinterpret_cast<ANativeWindowSetFrameRateFn>(
-          dlsym(RTLD_DEFAULT, "ANativeWindow_setFrameRate"));
+  static const ANativeWindowSetFrameRateFn set_frame_rate = []() -> ANativeWindowSetFrameRateFn {
+    void *libnativewindow = dlopen("libnativewindow.so", RTLD_LAZY);
+    if (libnativewindow == nullptr) {
+      __android_log_print(ANDROID_LOG_INFO,
+                          "blender-refresh",
+                          "dlopen libnativewindow.so failed: %s",
+                          dlerror());
+      return nullptr;
+    }
+    return reinterpret_cast<ANativeWindowSetFrameRateFn>(
+        dlsym(libnativewindow, "ANativeWindow_setFrameRate"));
+  }();
   if (set_frame_rate == nullptr) {
     __android_log_print(ANDROID_LOG_INFO,
                         "blender-refresh",
