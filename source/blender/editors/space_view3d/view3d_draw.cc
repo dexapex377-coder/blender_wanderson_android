@@ -1529,18 +1529,23 @@ static void draw_performance_stats(Depsgraph *depsgraph,
 /**
  * Always-on runtime diagnostics for the Statistics overlay.
  *
+ * Reads are only valid while the viewport is actively redrawing, and that is
+ * intentional, not a bug: with `draw_aa=false` (TAA capped to 1 sample) the
+ * viewport no longer redraws in idle, so there are no new frames to sample.
+ * The counter refreshes while interacting (orbit/pan/zoom) or during playback --
+ * read it then, not at rest. That is the measurement criterion for all
+ * performance experiments.
+ *
  * Unlike the animation-player FPS (`ED_scene_draw_fps`) and the event-driven
  * "Performance" readout (depsgraph evaluation + CPU-side sync/submission), this
  * timestamps consecutive viewport redraws: it reports the frame rate rendering
- * actually delivers, continuously, without depending on playback or edits.
+ * actually delivers without depending on playback or edits.
  *
  * - FPS: measured frame-to-frame delta, windowed average of the last 60 redraws.
  * - RAM: resident set size of this process (MiB), refreshed once a second from
- *   /proc/self/statm.
- * - GPU: best-effort, global/system-wide busy %, published by the Java side
- *   (BlenderActivity -> android.os.GpuStatsHelper). Android has no reliable
- *   per-app GPU utilization API, so when the device does not expose one the
- *   value reads "N/D" on purpose rather than a made-up number.
+ *   /proc/self/statm. Android exposes no per-app GPU utilization to non-root
+ *   apps, so no GPU metric is shown on purpose (RAM does have a public API,
+ *   GPU utilization does not).
  */
 static void draw_android_perf_stats(const float text_color[4],
                                     const int xoffset,
@@ -1575,8 +1580,8 @@ static void draw_android_perf_stats(const float text_color[4],
     window_valid = true;
   }
 
-  /* RSS + GPU publish once a second. */
-  static int ram_mb = -1, gpu_busy = -1;
+  /* RSS once a second. */
+  static int ram_mb = -1;
   static Clock::time_point last_tick = Clock::now();
   if (now - last_tick >= std::chrono::seconds(1)) {
     last_tick = now;
@@ -1589,12 +1594,10 @@ static void draw_android_perf_stats(const float text_color[4],
       }
       fclose(f);
     }
-    const char *gpu_pct = getenv("BLENDER_ANDROID_GPU_BUSY");
-    gpu_busy = (gpu_pct != nullptr) ? atoi(gpu_pct) : -1;
   }
 
   const int font_id = BLF_default();
-  const std::string labels[3] = {"FPS (real)", "RAM (app)", "GPU busy"};
+  const std::string labels[2] = {"FPS (real)", "RAM (app)"};
 
   float longest_label = 0;
   for (const std::string &label : labels) {
@@ -1603,7 +1606,7 @@ static void draw_android_perf_stats(const float text_color[4],
 
   const int xoffset2 = xoffset + int(longest_label) + int(0.5f * U.widget_unit);
 
-  std::string values[3];
+  std::string values[2];
   /* FPS in red when it drops below this mobile-target floor. */
   const float alert_fps = 30.0f;
   if (window_valid) {
@@ -1617,9 +1620,8 @@ static void draw_android_perf_stats(const float text_color[4],
     values[0] = "--";
   }
   values[1] = (ram_mb >= 0) ? fmt::format("{} MiB", ram_mb) : "N/D";
-  values[2] = (gpu_busy >= 0) ? fmt::format("{}% (global)", gpu_busy) : "N/D";
 
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 2; i++) {
     *yoffset -= line_height;
     BLF_draw_default(xoffset, *yoffset, 0.0f, labels[i].c_str(), labels[i].size());
     BLF_draw_default(xoffset2, *yoffset, 0.0f, values[i].c_str(), values[i].size());
