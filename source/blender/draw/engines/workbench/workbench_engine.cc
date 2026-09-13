@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+#include <cfloat>
 #include "BLI_rect.hh"
 #include "BLI_string.hh"
 #include "BLI_time.hh"
@@ -75,6 +76,18 @@ class Instance : public DrawEngine {
   uint64_t depsgraph_last_update_ = 0;
 
   const char *hair_buffer_overflow_error_ = nullptr;
+
+#ifdef __ANDROID__
+  /* DOWNSTREAM (Android): accumulated per-pass-group CPU timings for the perf probe. */
+  struct DiagPassAccum
+  {
+    double t_clear = DBL_MAX;
+    double t_opaque = DBL_MAX;
+    double t_post = DBL_MAX;
+  };
+  DiagPassAccum diag_pass_accum_;
+  int diag_counter_ = 0;
+#endif
 
  public:
   const DRWContext *draw_ctx = nullptr;
@@ -464,6 +477,11 @@ class Instance : public DrawEngine {
   {
     int2 resolution = scene_state_.resolution;
 
+#ifdef __ANDROID__
+    /* DOWNSTREAM (Android): Per-pass-group timing (CPU wall clock around GPU submission). */
+    const double diag_t0 = BLI_time_now_seconds();
+#endif
+
     /** Always setup in-front depth, since Overlays can be updated without causing a Workbench
      * re-sync (See #113580). */
     bool needs_depth_in_front = !transparent_ps_.accumulation_in_front_ps_.is_empty() ||
@@ -503,16 +521,34 @@ class Instance : public DrawEngine {
     std::array<double4, 2> clear_colors = {double4(scene_state_.background_color), double4(0.0f)};
     GPU_framebuffer_multi_clear(resources_.clear_fb, clear_colors);
     GPU_framebuffer_clear_depth_stencil(resources_.clear_fb, 1.0f, 0x00);
+#ifdef __ANDROID__
+    const double diag_t_clear = BLI_time_now_seconds();
+#endif
 
     opaque_ps_.draw(
         manager, view_, resources_, resolution, scene_state_.draw_shadows ? &shadow_ps_ : nullptr);
     transparent_ps_.draw(manager, view_, resources_, resolution);
     transparent_depth_ps_.draw(manager, view_, resources_);
+#ifdef __ANDROID__
+    const double diag_t_opaque = BLI_time_now_seconds();
+#endif
 
     volume_ps_.draw(manager, view_, resources_);
     outline_ps_.draw(manager, resources_);
     dof_ps_.draw(manager, view_, resources_, resolution);
     anti_aliasing_ps_.draw(draw_ctx, manager, view_, scene_state_, resources_, depth_in_front_tx);
+#ifdef __ANDROID__
+    const double diag_t_post = BLI_time_now_seconds();
+    DiagPassAccum &diag_accum = diag_pass_accum_;
+
+    if (diag_counter_ == 0) {
+      diag_accum = {0.0, 0.0, 0.0};
+    }
+    diag_accum.t_clear += diag_t_clear - diag_t0;
+    diag_accum.t_opaque += diag_t_opaque - diag_t_clear;
+    diag_accum.t_post += diag_t_post - diag_t_opaque;
+    diag_counter_++;
+#endif
 
     resources_.object_id_tx.release();
   }
@@ -553,26 +589,35 @@ class Instance : public DrawEngine {
     /* DOWNSTREAM (Android): diagnostic perf probe. Log viewport resolution, pixel area, AA
      * config and frame time every 30th presented frame. Correlates the 42 (small viewport)
      * vs 14 (fullscreen) fps gap with bytes-per-pixel traffic leaving the TBDR tile. */
-    static int diag_counter = 0;
-    if ((++diag_counter % 30) == 0) {
+    static int diag_probe_counter = 0;
+    if ((++diag_probe_counter % 30) == 0) {
       const int2 res = scene_state_.resolution;
       const int64_t area = int64_t(res[0]) * res[1];
       static double t_last = 0.0f;
       const double t_now = BLI_time_now_seconds();
       const double dt = (t_last == 0.0) ? 0.0 : (t_now - t_last);
       t_last = t_now;
+      double t_clear = 0.0, t_opaque = 0.0, t_post = 0.0;
+      if (diag_counter_ > 0) {
+        t_clear = diag_pass_accum_.t_clear / diag_counter_;
+        t_opaque = diag_pass_accum_.t_opaque / diag_counter_;
+        t_post = diag_pass_accum_.t_post / diag_counter_;
+      }
       __android_log_print(ANDROID_LOG_INFO,
                           "workbench_perf",
                           "res=%dx%d area=%lld bytes/pass(RGBA16F)=%lld draw_aa=%d samples=%d "
-                          "fps=%.1f dt=%.1fms",
+                          "dt=%.1fms t_clear=%.1fms t_opaque=%.1fms t_post=%.1fms",
                           res[0],
                           res[1],
                           (long long)area,
                           (long long)(area * 8),
                           scene_state_.draw_aa,
                           scene_state_.samples_len,
-                          (dt > 0.0) ? 1.0 / dt : 0.0,
-                          dt * 1000.0);
+                          dt * 1000.0,
+                          (t_clear > 0.0) ? t_clear * 1000.0 : 0.0,
+                          (t_opaque > 0.0) ? t_opaque * 1000.0 : 0.0,
+                          (t_post > 0.0) ? t_post * 1000.0 : 0.0);
+      diag_counter_ = 0;
     }
 #endif
   }
