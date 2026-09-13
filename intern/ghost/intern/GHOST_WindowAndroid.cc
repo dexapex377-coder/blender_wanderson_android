@@ -17,6 +17,7 @@
 
 #include <android/log.h>
 #include <android/native_window.h>
+#include <dlfcn.h>
 
 /**
  * Shrink the buffers the window renders into; the display scales them back up. Every render
@@ -74,7 +75,20 @@ static void ghost_android_apply_refresh_rate(ANativeWindow *native_window)
     return;
   }
   hz = std::min(hz, 120);
-  const int32_t result = ANativeWindow_setFrameRate(
+  /* ANativeWindow_setFrameRate is only available at runtime (API 30+); it is not exported by
+   * the NDK's libandroid stub (which would fail the -Wl,--no-undefined link). Resolve it via
+   * dlsym against the device's real libandroid.so. */
+  typedef int32_t (*ANativeWindowSetFrameRateFn)(ANativeWindow *, float, int8_t);
+  static const ANativeWindowSetFrameRateFn set_frame_rate =
+      reinterpret_cast<ANativeWindowSetFrameRateFn>(
+          dlsym(RTLD_DEFAULT, "ANativeWindow_setFrameRate"));
+  if (set_frame_rate == nullptr) {
+    __android_log_print(ANDROID_LOG_INFO,
+                        "blender-refresh",
+                        "ANativeWindow_setFrameRate not found at runtime, skipping");
+    return;
+  }
+  const int32_t result = set_frame_rate(
       native_window, float(hz), ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
   __android_log_print(ANDROID_LOG_INFO,
                       "blender-refresh",
