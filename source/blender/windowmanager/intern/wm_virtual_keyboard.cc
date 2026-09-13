@@ -2034,7 +2034,7 @@ static void vk_shortcuts_load(VirtualKeyboard &vk)
     }
     line = end + 1;
   }
-  MEM_delete_void(text);
+  MEM_delete_void(static_cast<void *>(text));
 }
 
 static void vk_shortcuts_save(const VirtualKeyboard &vk)
