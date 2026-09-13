@@ -89,9 +89,14 @@ struct FramePerfProbe {
 
   static bool enabled()
   {
+    /* Mirror `blender::perf::enabled()`: an empty or "0" value in the environment must NOT
+     * short-circuit the Android system-property fallback, or the probe never turns on when the
+     * sandbox exports BLENDER_PERF="" (as Android's app-process env often has). */
     static const bool on = []() {
       if (const char *env = getenv("BLENDER_PERF")) {
-        return atoi(env) != 0;
+        if (atoi(env) != 0) {
+          return true;
+        }
       }
 #ifdef __ANDROID__
       char value[PROP_VALUE_MAX] = {};

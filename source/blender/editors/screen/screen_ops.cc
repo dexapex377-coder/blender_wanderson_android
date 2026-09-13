@@ -16,6 +16,7 @@
 #include "BLI_listbase.hh"
 #include "BLI_math_rotation_c.hh"
 #include "BLI_math_vector_c.hh"
+#include "BLI_perf_probe.hh"
 #include "BLI_time.hh"
 #include "BLI_utildefines.hh"
 
@@ -6420,6 +6421,7 @@ static wmOperatorStatus screen_animation_step_invoke(bContext *C,
                                                      wmOperator * /*op*/,
                                                      const wmEvent *event)
 {
+  PERF_ZONE(screen_animation_tick);
   bScreen *screen = CTX_wm_screen(C);
   wmTimer *wt = screen->animtimer;
 

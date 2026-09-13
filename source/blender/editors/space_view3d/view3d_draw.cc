@@ -15,6 +15,7 @@
 #include "BLI_math_half.hh"
 #include "BLI_math_matrix_c.hh"
 #include "BLI_math_rotation_c.hh"
+#include "BLI_perf_probe.hh"
 #include "BLI_rect.hh"
 #include "BLI_string_utf8.hh"
 #include "BLI_string_utils.hh"
@@ -1660,6 +1661,7 @@ void view3d_draw_region_info(const bContext *C, ARegion *region)
 
 static void view3d_draw_view(const bContext *C, ARegion *region)
 {
+  PERF_ZONE(view3d_draw_view);
   ED_view3d_draw_setup_view(CTX_wm_manager(C),
                             CTX_wm_window(C),
                             CTX_data_expect_evaluated_depsgraph(C),

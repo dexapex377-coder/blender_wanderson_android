@@ -47,6 +47,42 @@ static void ghost_android_apply_render_scale(ANativeWindow *native_window)
                       divisor);
 }
 
+/**
+ * Hand the compositor a preferred refresh rate, so SurfaceFlinger stops parking this app on the
+ * panel's 30 Hz battery mode. Blender's draw is light (~7 ms); the 33 ms vsync block that mode
+ * adds to every eglSwapBuffers is what throttles the viewport, not the draw call itself.
+ *
+ * Ask for the 90 Hz step of the display's ladder rather than 120: half the GPU frame budget of
+ * 120 with still-easy headroom, and the mode mid-range Mali panels pick comfily. DEFAULT
+ * compatibility lets the platform round to a sanctioned mode instead of pinning an exact one.
+ *
+ * Override with `setprop debug.blender.refresh 60|90|120` (or 0 to disable) for benchmarking.
+ */
+static void ghost_android_apply_refresh_rate(ANativeWindow *native_window)
+{
+  if (native_window == nullptr) {
+    return;
+  }
+  char value[PROP_VALUE_MAX] = {};
+  int hz = 90;
+  if (__system_property_get("debug.blender.refresh", value) > 0 && value[0] != '\0') {
+    hz = atoi(value);
+  }
+  if (hz <= 0) {
+    __android_log_print(
+        ANDROID_LOG_INFO, "blender-refresh", "refresh rate request disabled (prop 0)");
+    return;
+  }
+  hz = std::min(hz, 120);
+  const int32_t result = ANativeWindow_setFrameRate(
+      native_window, float(hz), ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
+  __android_log_print(ANDROID_LOG_INFO,
+                      "blender-refresh",
+                      "setFrameRate(%d Hz) -> %s",
+                      hz,
+                      (result == 0) ? "ok" : "failed");
+}
+
 GHOST_WindowAndroid::GHOST_WindowAndroid(GHOST_SystemAndroid *system,
                                          ANativeWindow *native_window,
                                          const char *title,
@@ -63,6 +99,7 @@ GHOST_WindowAndroid::GHOST_WindowAndroid(GHOST_SystemAndroid *system,
   if (native_window_) {
     ANativeWindow_acquire(native_window_);
     ghost_android_apply_render_scale(native_window_);
+    ghost_android_apply_refresh_rate(native_window_);
   }
   setDrawingContextType(type);
 }
@@ -90,6 +127,7 @@ void GHOST_WindowAndroid::setNativeWindow(ANativeWindow *native_window)
   if (native_window_) {
     ANativeWindow_acquire(native_window_);
     ghost_android_apply_render_scale(native_window_);
+    ghost_android_apply_refresh_rate(native_window_);
   }
 
 #ifdef WITH_VULKAN_BACKEND

@@ -12,6 +12,8 @@
 
 #include "DNA_scene_types.h"
 
+#include "BLI_perf_probe.hh"
+
 #include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_query.hh"
 #include "DEG_depsgraph_writeback_sync.hh"
@@ -54,6 +56,7 @@ static void deg_flush_updates_and_refresh(deg::Depsgraph *deg_graph,
 
 void DEG_evaluate_on_refresh(Depsgraph *graph, const DepsgraphEvaluateSyncWriteback sync_writeback)
 {
+  PERF_ZONE(deg_eval_on_refresh);
   deg::Depsgraph *deg_graph = reinterpret_cast<deg::Depsgraph *>(graph);
   const Scene *scene = DEG_get_input_scene(graph);
   const float frame = BKE_scene_frame_get(scene);

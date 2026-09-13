@@ -1540,6 +1540,7 @@ DRWTextStore *DRW_text_cache_ensure()
  */
 static void drw_draw_render_loop_3d(DRWContext &draw_ctx, RenderEngineType *engine_type)
 {
+  PERF_ZONE(drw_render_loop_3d);
   using namespace blender::draw;
   Depsgraph *depsgraph = draw_ctx.depsgraph;
   View3D *v3d = draw_ctx.v3d;
