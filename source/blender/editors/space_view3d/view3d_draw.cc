@@ -7,7 +7,14 @@
  */
 
 #include <cmath>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <fmt/format.h>
+
+#ifdef __ANDROID__
+#  include <unistd.h>
+#endif
 
 #include "BLI_listbase.hh"
 #include "BLI_math_color_c.hh"
@@ -1518,6 +1525,109 @@ static void draw_performance_stats(Depsgraph *depsgraph,
   draw_time_stat(labels[TOTAL], total_time);
 }
 
+#if defined(__ANDROID__)
+/**
+ * Always-on runtime diagnostics for the Statistics overlay.
+ *
+ * Unlike the animation-player FPS (`ED_scene_draw_fps`) and the event-driven
+ * "Performance" readout (depsgraph evaluation + CPU-side sync/submission), this
+ * timestamps consecutive viewport redraws: it reports the frame rate rendering
+ * actually delivers, continuously, without depending on playback or edits.
+ *
+ * - FPS: measured frame-to-frame delta, windowed average of the last 60 redraws.
+ * - RAM: resident set size of this process (MiB), refreshed once a second from
+ *   /proc/self/statm.
+ * - GPU: best-effort, global/system-wide busy %, published by the Java side
+ *   (BlenderActivity -> android.os.GpuStatsHelper). Android has no reliable
+ *   per-app GPU utilization API, so when the device does not expose one the
+ *   value reads "N/D" on purpose rather than a made-up number.
+ */
+static void draw_android_perf_stats(const float text_color[4],
+                                    const int xoffset,
+                                    int *yoffset,
+                                    const int line_height)
+{
+  using Clock = std::chrono::steady_clock;
+
+  static Clock::time_point prev_frame = Clock::now();
+  /* Rolling 60-frame average, like the perf probe. */
+  static double acc_time_ms = 0.0, acc_fps = 0.0;
+  static double smooth_ms = 0.0, smooth_fps = 0.0;
+  static int window_count = 0;
+  static constexpr int window = 60;
+  static bool window_valid = false;
+
+  const Clock::time_point now = Clock::now();
+  const double dt_ms = std::chrono::duration<double, std::milli>(now - prev_frame).count();
+  prev_frame = now;
+  /* Drop sibling-redraw gaps and stalls; they are not render frames. */
+  if (dt_ms > 0.0 && dt_ms < 2000.0) {
+    acc_time_ms += dt_ms;
+    acc_fps += 1000.0 / dt_ms;
+    window_count++;
+  }
+  if (window_count >= window) {
+    smooth_ms = acc_time_ms / double(window_count);
+    smooth_fps = acc_fps / double(window_count);
+    acc_time_ms = 0.0;
+    acc_fps = 0.0;
+    window_count = 0;
+    window_valid = true;
+  }
+
+  /* RSS + GPU publish once a second. */
+  static int ram_mb = -1, gpu_busy = -1;
+  static Clock::time_point last_tick = Clock::now();
+  if (now - last_tick >= std::chrono::seconds(1)) {
+    last_tick = now;
+    long pages = -1;
+    FILE *f = fopen("/proc/self/statm", "r");
+    if (f != nullptr) {
+      if (fscanf(f, "%*ld %ld", &pages) == 1) {
+        const long page_kb = long(sysconf(_SC_PAGESIZE) / 1024);
+        ram_mb = int((pages * page_kb) / 1024);
+      }
+      fclose(f);
+    }
+    const char *gpu_pct = getenv("BLENDER_ANDROID_GPU_BUSY");
+    gpu_busy = (gpu_pct != nullptr) ? atoi(gpu_pct) : -1;
+  }
+
+  const int font_id = BLF_default();
+  const std::string labels[3] = {"FPS (real)", "RAM (app)", "GPU busy"};
+
+  float longest_label = 0;
+  for (const std::string &label : labels) {
+    longest_label = std::max(longest_label, BLF_width(font_id, label.c_str(), label.size()));
+  }
+
+  const int xoffset2 = xoffset + int(longest_label) + int(0.5f * U.widget_unit);
+
+  std::string values[3];
+  /* FPS in red when it drops below this mobile-target floor. */
+  const float alert_fps = 30.0f;
+  if (window_valid) {
+    values[0] = fmt::format("{:.1f} ({:.1f} ms)", smooth_fps, smooth_ms);
+    if (smooth_fps < alert_fps) {
+      float4 alert_rgb = get_low_fps_color();
+      BLF_color4fv(font_id, alert_rgb);
+    }
+  }
+  else {
+    values[0] = "--";
+  }
+  values[1] = (ram_mb >= 0) ? fmt::format("{} MiB", ram_mb) : "N/D";
+  values[2] = (gpu_busy >= 0) ? fmt::format("{}% (global)", gpu_busy) : "N/D";
+
+  for (int i = 0; i < 3; i++) {
+    *yoffset -= line_height;
+    BLF_draw_default(xoffset, *yoffset, 0.0f, labels[i].c_str(), labels[i].size());
+    BLF_draw_default(xoffset2, *yoffset, 0.0f, values[i].c_str(), values[i].size());
+  }
+  BLF_color4fv(font_id, text_color);
+}
+#endif /* __ANDROID__ */
+
 void view3d_draw_region_info(const bContext *C, ARegion *region)
 {
   RegionView3D *rv3d = static_cast<RegionView3D *>(region->regiondata);
@@ -1641,6 +1751,9 @@ void view3d_draw_region_info(const bContext *C, ARegion *region)
       View3D *v3d_local = v3d->localvd ? v3d : nullptr;
       ED_info_draw_stats(
           bmain, scene, view_layer, v3d_local, xoffset, &yoffset, VIEW3D_OVERLAY_LINEHEIGHT);
+#if defined(__ANDROID__)
+      draw_android_perf_stats(text_color, xoffset, &yoffset, VIEW3D_OVERLAY_LINEHEIGHT);
+#endif
     }
 
     /* Set the size back to the default hard-coded size. Otherwise anyone drawing after this,

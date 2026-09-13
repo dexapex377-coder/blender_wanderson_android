@@ -13,6 +13,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
@@ -74,6 +76,19 @@ public class BlenderActivity extends NativeActivity {
 
   private InputView inputView;
 
+  /* Publishes a global/system-wide GPU busy % to the native side once a second
+   * (see publishGpuStats). Blender shows it in the Statistics overlay; when the
+   * device does not expose the value the env var simply stays unset and native
+   * displays "N/D" instead of a number. */
+  private final Handler gpuStatsHandler = new Handler(Looper.getMainLooper());
+  private final Runnable gpuStatsTask = new Runnable() {
+    @Override
+    public void run() {
+      publishGpuStats();
+      gpuStatsHandler.postDelayed(this, 1000L);
+    }
+  };
+
   private native void nativeOnCommitText(String text);
   private native void nativeOnKey(int keycode, int action, int metaState);
   private native void nativeOpenMainFile(String path);
@@ -94,6 +109,7 @@ public class BlenderActivity extends NativeActivity {
 
     inputView = new InputView(this);
     addContentView(inputView, new ViewGroup.LayoutParams(1, 1));
+    gpuStatsHandler.post(gpuStatsTask);
   }
 
   /* Scoped storage confines the app to its sandbox, but Blender opens and saves
@@ -443,6 +459,43 @@ public class BlenderActivity extends NativeActivity {
     catch (Exception ex) {
       /* Cosmetic. The panel simply leaves out whatever did not arrive. */
       Log.w(TAG, "hardware names unavailable", ex);
+    }
+  }
+
+  /* Best-effort GPU busy percent for the native Statistics overlay. Android has no
+   * reliable per-app GPU utilization API: android.os.GpuStatsHelper (API 33+) only
+   * reports global, system-wide figures on devices that enable the aggregation, so
+   * this is intentionally labeled "global" on the native side, and reflection keeps
+   * the APK compiling even where the class is absent. Any failure leaves the env var
+   * unset and native prints "N/D" rather than a fabricated number. */
+  private void publishGpuStats() {
+    if (Build.VERSION.SDK_INT < 33) {
+      return;
+    }
+    try {
+      Class<?> helperClass = Class.forName("android.os.GpuStatsHelper");
+      Object helper = helperClass.getMethod("getInstance").invoke(null);
+      Object[] stats = (Object[]) helperClass.getMethod("getGpuStatsUpdated").invoke(helper);
+      if (stats == null || stats.length == 0) {
+        return;
+      }
+      int busy = -1;
+      for (Object stat : stats) {
+        try {
+          int pct = ((Number) stat.getClass().getMethod("getBusyPercent").invoke(stat)).intValue();
+          busy = Math.max(busy, pct);
+        }
+        catch (ReflectiveOperationException ignored) {
+          /* Individual stat row without the accessor; keep going. */
+        }
+      }
+      if (busy >= 0) {
+        Os.setenv("BLENDER_ANDROID_GPU_BUSY", String.valueOf(busy), true);
+      }
+    }
+    catch (Throwable t) {
+      /* Class, method or data absent on this device/Android version. */
+      Log.w(TAG, "gpu busy stats unavailable", t);
     }
   }
 
