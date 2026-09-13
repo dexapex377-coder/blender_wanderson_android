@@ -13,7 +13,14 @@
 /* Allow using deprecated functionality for .blend file I/O. */
 #define DNA_DEPRECATED_ALLOW
 
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+
+#ifdef __ANDROID__
+#  include <sys/system_properties.h>
+#endif
 
 #include "DNA_ID_enums.h"
 #include "DNA_layer_types.h"
@@ -64,6 +71,113 @@
 #include "BLO_read_write.hh"
 
 namespace blender {
+
+namespace {
+
+/* Windowed frame-time probe. Prints average loop and draw milliseconds plus the implied frame
+ * rate to stdout every `window` frames. On Android stdout lands in logcat under tag "blender",
+ * so: `setprop debug.blender.perf 1` (or set BLENDER_PERF=1) and watch `adb logcat -s blender`.
+ * Off by default -- the chrono calls themselves are the only cost when it is off.
+ *
+ * `loop` is one WM_main_loop_body (events + notifiers + draw + swap, so it includes the vsync
+ * block of the frame it painted). `draw` is just the wm_draw_update part. Comparing the two
+ * shows where the frame went: when `draw ~= loop` the GPU/window drawing dominates; a `loop`
+ * that is large while `draw` is tiny points at event/notifier CPU work.
+ */
+struct FramePerfProbe {
+  static constexpr int window = 30;
+
+  static bool enabled()
+  {
+    static const bool on = []() {
+      if (const char *env = getenv("BLENDER_PERF")) {
+        return atoi(env) != 0;
+      }
+#ifdef __ANDROID__
+      char value[PROP_VALUE_MAX] = {};
+      if (__system_property_get("debug.blender.perf", value) > 0 && value[0] != '\0') {
+        return atoi(value) != 0;
+      }
+#endif
+      return false;
+    }();
+    return on;
+  }
+
+  void frame_begin()
+  {
+    frame_begin_ = std::chrono::steady_clock::now();
+  }
+
+  void before_draw()
+  {
+    draw_begin_ = std::chrono::steady_clock::now();
+  }
+
+  void report()
+  {
+    const double loop_ms = elapsed_ms(frame_begin_);
+    const double draw_ms = elapsed_ms(draw_begin_);
+    loop_ms_sum_ += loop_ms;
+    draw_ms_sum_ += draw_ms;
+    count_++;
+    /* Keep tables warm even while nothing happens: reset per-window regardless. */
+    if (count_ < window) {
+      return;
+    }
+    const double window_s = loop_ms_sum_ / 1000.0;
+    printf("[perf] %.1f frame/s avg | loop %.2f ms | draw %.2f ms | (last %d)\n",
+           window / (window_s > 0.0 ? window_s : 1e-9),
+           loop_ms_sum_ / double(window),
+           draw_ms_sum_ / double(window),
+           window);
+    count_ = 0;
+    loop_ms_sum_ = 0.0;
+    draw_ms_sum_ = 0.0;
+  }
+
+ private:
+  static double elapsed_ms(const std::chrono::steady_clock::time_point since)
+  {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - since)
+        .count();
+  }
+
+  std::chrono::steady_clock::time_point frame_begin_;
+  std::chrono::steady_clock::time_point draw_begin_;
+  double loop_ms_sum_ = 0.0;
+  double draw_ms_sum_ = 0.0;
+  int count_ = 0;
+};
+
+struct FramePerfScope {
+  FramePerfProbe probe;
+  bool on;
+
+  FramePerfScope()
+  {
+    on = FramePerfProbe::enabled();
+    if (on) {
+      probe.frame_begin();
+    }
+  }
+
+  void before_draw()
+  {
+    if (on) {
+      probe.before_draw();
+    }
+  }
+
+  void report()
+  {
+    if (on) {
+      probe.report();
+    }
+  }
+};
+
+}  // namespace
 
 /* ****************************************************** */
 
@@ -610,6 +724,7 @@ void WM_main_entry(bContext *C)
 
 void WM_main_loop_body(bContext *C)
 {
+  FramePerfScope perf;
   /* Get events from ghost, handle window events, add to window queues. */
   wm_window_events_process(C);
 
@@ -620,7 +735,9 @@ void WM_main_loop_body(bContext *C)
   wm_event_do_notifiers(C);
 
   /* Execute cached changes draw. */
+  perf.before_draw();
   wm_draw_update(C);
+  perf.report();
 
   PRF_frame_mark;
 }

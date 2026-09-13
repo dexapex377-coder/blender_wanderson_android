@@ -36,6 +36,16 @@ void Sampling::init(const Scene *scene)
 
   sample_count_ = inst_.is_viewport() ? scene->eevee.taa_samples : render_sample_count;
 
+#ifdef __ANDROID__
+  /* Re-render the engine once per presented frame while idle converging toward taa_samples
+   * (default 8). Each pass is a full-resolution fill on the tile-memory GPUs this port targets,
+   * and 8 of them back-to-back is exactly the idle-TAA stall the workbench engine already caps
+   * to a single sample (workbench_state.cc). 0 (never-settle progressive) is left untouched. */
+  if (inst_.is_viewport() && sample_count_ > 1) {
+    sample_count_ = 1;
+  }
+#endif
+
   if (inst_.is_image_render) {
     sample_count_ = math::max(uint64_t(1), sample_count_);
   }
