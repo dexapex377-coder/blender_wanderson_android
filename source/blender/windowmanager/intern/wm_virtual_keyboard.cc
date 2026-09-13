@@ -549,6 +549,7 @@ static void vk_editor_key(VirtualKeyboard &vk,
 static void vk_overlay_draw(const wmWindow *win);
 static void vk_overlay_place(VirtualKeyboard &vk, const wmWindow *win);
 static void vk_release_held_shortcuts(VirtualKeyboard &vk, wmWindowManager *wm, wmWindow *win);
+static void vk_shortcuts_ensure_loaded(VirtualKeyboard &vk);
 
 /** The interface resolution scale, which the keyboard sizes its text and its bar against. */
 static float vk_scale()
@@ -2033,7 +2034,7 @@ static void vk_shortcuts_load(VirtualKeyboard &vk)
     }
     line = end + 1;
   }
-  MEM_freeN(text);
+  MEM_delete_void(text);
 }
 
 static void vk_shortcuts_save(const VirtualKeyboard &vk)
