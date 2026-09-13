@@ -4,7 +4,7 @@
 
 #include "BLI_rect.hh"
 #include "BLI_string.hh"
-#include "BLI_time.h"
+#include "BLI_time.hh"
 #ifdef __ANDROID__
 #  include <android/log.h>
 #endif
