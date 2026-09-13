@@ -4,6 +4,10 @@
 
 #include "BLI_rect.hh"
 #include "BLI_string.hh"
+#include "BLI_time.h"
+#ifdef __ANDROID__
+#  include <android/log.h>
+#endif
 
 #include "DNA_fluid_types.h"
 
@@ -544,6 +548,33 @@ class Instance : public DrawEngine {
       draw_viewport(manager, dtxl->depth, dtxl->depth_in_front, dtxl->color);
     }
     DRW_submission_end();
+
+#ifdef __ANDROID__
+    /* DOWNSTREAM (Android): diagnostic perf probe. Log viewport resolution, pixel area, AA
+     * config and frame time every 30th presented frame. Correlates the 42 (small viewport)
+     * vs 14 (fullscreen) fps gap with bytes-per-pixel traffic leaving the TBDR tile. */
+    static int diag_counter = 0;
+    if ((++diag_counter % 30) == 0) {
+      const int2 res = scene_state_.resolution;
+      const int64_t area = int64_t(res[0]) * res[1];
+      static double t_last = 0.0f;
+      const double t_now = BLI_time_now_seconds();
+      const double dt = (t_last == 0.0) ? 0.0 : (t_now - t_last);
+      t_last = t_now;
+      __android_log_print(ANDROID_LOG_INFO,
+                          "workbench_perf",
+                          "res=%dx%d area=%lld bytes/pass(RGBA16F)=%lld draw_aa=%d samples=%d "
+                          "fps=%.1f dt=%.1fms",
+                          res[0],
+                          res[1],
+                          (long long)area,
+                          (long long)(area * 8),
+                          scene_state_.draw_aa,
+                          scene_state_.samples_len,
+                          (dt > 0.0) ? 1.0 / dt : 0.0,
+                          dt * 1000.0);
+    }
+#endif
   }
 
   void draw_image_render(Manager &manager,

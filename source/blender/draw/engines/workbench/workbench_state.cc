@@ -224,11 +224,16 @@ void SceneState::init(const DRWContext *context,
   /* DOWNSTREAM (Android): Cap TAA to 1 sample always. Full idle TAA (default 8) renders the
    * whole engine 8x per presented frame on the PowerVR BXM-8-256 (workbench_engine.cc requests
    * a redraw per sample). Box select / navigation already caps to 1 and the same scene runs at
-   * ~50fps there, vs <20fps idle. SMAA still runs as final AA pass (draw_aa stays true). */
+   * ~50fps there, vs <20fps idle. */
   _samples_len = min_ii(_samples_len, 1);
-#endif
-  /* 0 samples means no AA */
+  /* DOWNSTREAM (Android): AA experiment #1 -- disable SMAA entirely (draw_aa=false) so the
+   * three full-screen SMAA passes (edge RG8, weight RGBA8, resolve) stop running. This is the
+   * diagnostic build: keep until the 42/14 fps A-B is re-measured, then decide whether to keep
+   * or revert. TAA accumulation is already capped to 1 sample above. */
+  draw_aa = false;
+#else
   draw_aa = _samples_len > 0;
+#endif
   _samples_len = max_ii(_samples_len, 1);
 
   /* Reset the TAA when we have already draw a sample, but the sample count differs from previous
