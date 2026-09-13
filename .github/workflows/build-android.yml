@@ -326,6 +326,31 @@ jobs:
             --print-file-type "$LIBDIR/ffmpeg/lib/libavutil.a" 2>/dev/null | grep -c "ABS" || true
           echo "FFmpeg + codec deps built with PIC."
 
+      # OIDN must be linked STATICALLY into libblender.so: the shared layout's
+      # CPU device is a dlopen()ed module (libOpenImageDenoise_device_cpu.so.2.5.0)
+      # that the APK only ships as lib*.so, and with no DT_NEEDED edge from the
+      # other OIDN libs package.sh's NEEDED-closure walk never stages it -- runtime
+      # then reports "Failed to create OIDN CPU device". Linking against the .a's
+      # (deps/build.sh::build_oidn, -DOIDN_STATIC_LIB=ON) removes the module loader
+      # entirely, matching the Wanweison APK where libblender.so embeds OIDN (no
+      # OpenImageDenoise DT_NEEDED at all). The prebuilt lib-android_arm64 tree
+      # ships the SHARED layout, so drop it first or the .so's win the link.
+      - name: Build OIDN static (denoiser linked into libblender.so)
+        run: |
+          set -o pipefail
+          cd blender
+          LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
+          echo "=== Removing prebuilt SHARED OIDN (replaced by static .a) ==="
+          rm -rf "$LIBDIR/openimagedenoise"
+          echo "=== Building ISPC (host tool) + OIDN static ==="
+          bash build_files/android/deps/build.sh ispc oidn
+          echo "=== Validating OIDN static output ==="
+          ls "$LIBDIR/openimagedenoise/lib/"*.a || { echo "ERROR: no OIDN .a produced"; exit 1; }
+          if ls "$LIBDIR/openimagedenoise/lib/"*.so 2>/dev/null; then
+            echo "ERROR: OIDN .so still present (shared layout)"; exit 1
+          fi
+          echo "OIDN static OK."
+
       # Empty stub archives for -lpthread/-lrt (bionic folds both into libc).
       # Mirrors deps/build.sh::stub_libs() byte-for-byte.
       - name: Create .stublibs

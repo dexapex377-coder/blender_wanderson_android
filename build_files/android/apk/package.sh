@@ -155,12 +155,15 @@ for bridge in meshopt draco; do
   fi
 done
 
-# OIDN loads the CPU device through a dlopen()ed module
-# (libOpenImageDenoise_device_cpu.so) that has no DT_NEEDED edge from the
-# other two libraries, so the NEEDED closure walk below never stages it and
-# Cycles/the compositor end up with no denoiser even though OIDN is linked.
-cp "$LIBDIR/openimagedenoise/lib/libOpenImageDenoise_device_cpu.so" "$JNI/"
-echo "[apk] bundled OIDN device_cpu module (dlopen'ed)"
+# OIDN is linked statically into libblender.so (deps/build.sh::build_oidn sets
+# -DOIDN_STATIC_LIB=ON, so no libOpenImageDenoise*.so exists to stage and the
+# dlopen()ed device_cpu module is removed from the picture entirely). If a
+# stray .a-less, shared build ever returns, fail loudly instead of shipping an
+# APK whose denoiser dies at runtime with "Failed to create OIDN CPU device".
+if [ "$(find "$LIBDIR/openimagedenoise/lib" -name 'libOpenImageDenoise*.so*' 2>/dev/null | wc -l)" -gt 0 ]; then
+  echo "ERROR: OIDN built SHARED; static link required (build.sh build_oidn)." >&2
+  exit 1
+fi
 
 # USD finds its file-format plugins through the plugInfo.json files here, so
 # without them the importers and exporters are built but never register.
