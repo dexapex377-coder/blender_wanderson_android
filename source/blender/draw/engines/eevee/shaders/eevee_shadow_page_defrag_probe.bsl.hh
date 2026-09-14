@@ -218,7 +218,7 @@ PipelineCompute page_defrag_p2(defrag_p2);
  * and this exact code can be ported into `eevee_shadow_page_ops.bsl.hh`. */
 [[compute, local_size(1)]]
 void defrag_p2a([[resource_table]] PageAllocator &allocator,
-                [[resource_table]] Commands &cmds,
+                [[resource_table]] ProbeCommands &cmds,
                 [[resource_table]] Statistics &stats)
 {
   int additional_pages = allocator.pages_infos_buf.page_alloc_count -
