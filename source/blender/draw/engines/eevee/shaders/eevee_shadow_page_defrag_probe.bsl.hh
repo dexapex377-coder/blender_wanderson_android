@@ -30,7 +30,7 @@ namespace eevee::shadow {
 using PageAllocator = eevee::shadow::PageAllocator;
 using Statistics = eevee::shadow::Statistics;
 
-struct Commands {
+struct ProbeCommands {
   [[storage(5, write)]] DispatchCommand &clear_dispatch_buf;
   [[storage(6, write)]] DrawCommandArray &tile_draw_buf;
 };
@@ -41,7 +41,7 @@ struct Commands {
 /* P0: resets only. Same descriptor set as the real defrag. */
 [[compute, local_size(1)]]
 void defrag_p0([[resource_table]] PageAllocator &allocator,
-               [[resource_table]] Commands &cmds,
+               [[resource_table]] ProbeCommands &cmds,
                [[resource_table]] Statistics &stats)
 {
   /* Touch allocator to avoid any dead-binding elision. */
@@ -67,7 +67,7 @@ PipelineCompute page_defrag_p0(defrag_p0);
 /* P1: p0 + free-from-cache pop over the "old" cached range. */
 [[compute, local_size(1)]]
 void defrag_p1([[resource_table]] PageAllocator &allocator,
-               [[resource_table]] Commands &cmds,
+               [[resource_table]] ProbeCommands &cmds,
                [[resource_table]] Statistics &stats)
 {
   int additional_pages = allocator.pages_infos_buf.page_alloc_count -
@@ -128,7 +128,7 @@ PipelineCompute page_defrag_p1(defrag_p1);
 /* P2: p1 + cache ring compaction loop. */
 [[compute, local_size(1)]]
 void defrag_p2([[resource_table]] PageAllocator &allocator,
-               [[resource_table]] Commands &cmds,
+               [[resource_table]] ProbeCommands &cmds,
                [[resource_table]] Statistics &stats)
 {
   int additional_pages = allocator.pages_infos_buf.page_alloc_count -
@@ -216,7 +216,7 @@ PipelineCompute page_defrag_p2(defrag_p2);
 /* P3: p2 + new-range pop + wrap-around = full defrag replication. */
 [[compute, local_size(1)]]
 void defrag_p3([[resource_table]] PageAllocator &allocator,
-               [[resource_table]] Commands &cmds,
+               [[resource_table]] ProbeCommands &cmds,
                [[resource_table]] Statistics &stats)
 {
   int additional_pages = allocator.pages_infos_buf.page_alloc_count -
