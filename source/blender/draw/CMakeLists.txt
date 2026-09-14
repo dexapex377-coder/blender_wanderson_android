@@ -448,7 +448,6 @@ set(GLSL_SRC
   engines/eevee/shaders/eevee_shadow_page_allocate.bsl.hh
   engines/eevee/shaders/eevee_shadow_page_clear.bsl.hh
   engines/eevee/shaders/eevee_shadow_page_defrag.bsl.hh
-  engines/eevee/shaders/eevee_shadow_page_defrag_probe.bsl.hh
   engines/eevee/shaders/eevee_shadow_page_free.bsl.hh
   engines/eevee/shaders/eevee_shadow_page_mask.bsl.hh
   engines/eevee/shaders/eevee_shadow_page_ops.bsl.hh

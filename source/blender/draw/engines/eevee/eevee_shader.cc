@@ -226,13 +226,6 @@ ShaderGroups ShaderModule::static_shaders_load(const ShaderGroups request_bits,
                                        SHADOW_PAGE_ALLOCATE,
                                        SHADOW_PAGE_CLEAR,
                                        SHADOW_PAGE_DEFRAG,
-                                       SHADOW_PAGE_DEFRAG_PROBE_0,
-                                       SHADOW_PAGE_DEFRAG_PROBE_1,
-                                       SHADOW_PAGE_DEFRAG_PROBE_2,
-                                       SHADOW_PAGE_DEFRAG_PROBE_2A,
-                                       SHADOW_PAGE_DEFRAG_PROBE_2B,
-                                       SHADOW_PAGE_DEFRAG_PROBE_2C,
-                                       SHADOW_PAGE_DEFRAG_PROBE_3,
                                        SHADOW_PAGE_FREE,
                                        SHADOW_PAGE_MASK,
                                        SHADOW_TILEMAP_AMEND,
@@ -511,20 +504,6 @@ const char *ShaderModule::static_shader_create_info_name_get(eShaderType shader_
       return "eevee_shadow_page_clear";
     case SHADOW_PAGE_DEFRAG:
       return "eevee_shadow_page_defrag";
-    case SHADOW_PAGE_DEFRAG_PROBE_0:
-      return "eevee_shadow_page_defrag_p0";
-    case SHADOW_PAGE_DEFRAG_PROBE_1:
-      return "eevee_shadow_page_defrag_p1";
-    case SHADOW_PAGE_DEFRAG_PROBE_2:
-      return "eevee_shadow_page_defrag_p2";
-    case SHADOW_PAGE_DEFRAG_PROBE_2A:
-      return "eevee_shadow_page_defrag_p2a";
-    case SHADOW_PAGE_DEFRAG_PROBE_2B:
-      return "eevee_shadow_page_defrag_p2b";
-    case SHADOW_PAGE_DEFRAG_PROBE_2C:
-      return "eevee_shadow_page_defrag_p2c";
-    case SHADOW_PAGE_DEFRAG_PROBE_3:
-      return "eevee_shadow_page_defrag_p3";
     case SHADOW_PAGE_FREE:
       return "eevee_shadow_page_free";
     case SHADOW_PAGE_MASK:

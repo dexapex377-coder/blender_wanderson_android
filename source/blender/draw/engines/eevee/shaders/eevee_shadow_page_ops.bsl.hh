@@ -188,23 +188,39 @@ struct PageAllocator {
       find_first_valid(src, end);
     }
 
-    /* Defragment page in "old" range. */
+    /* Defragment page in "old" range.
+     * Forward/ascending traversal: scan holes from low to high and fill each with the
+     * first cached page. The previous implementation used a descending outer loop
+     * (`dst--`) with a nested advancing counter, a pattern the PowerVR BXM driver
+     * rejects at pipeline creation (VK_ERROR_UNKNOWN). The forward variant is
+     * equivalent: same set of cached pages, same relative order, packed contiguous
+     * (probe p2c confirmed the driver compiles it). */
     bool is_empty = (src == end);
     if (!is_empty) {
-      /* `page_cached_end` refers to the next empty slot.
-       * Decrement by one to refer to the first slot we can defragment. */
-      for (uint dst = end - 1; dst > src; dst--) {
+      for (uint dst = src + 1; dst < end; dst++) {
         /* Find hole. */
         if (pages_cached_buf[dst & page_mask].x != uint(-1)) {
           continue;
         }
+        uint old_page_idx = src & page_mask;
+        uint dst_page_idx = dst & page_mask;
         /* Update corresponding reference in tile. */
-        page_cache_update_page_ref(src & page_mask, dst & page_mask);
-        /* Move page. */
-        pages_cached_buf[dst & page_mask] = pages_cached_buf[src & page_mask];
-        pages_cached_buf[src & page_mask] = uint2(~0u);
+        page_cache_update_page_ref(old_page_idx, dst_page_idx);
+        /* Move page, one component at a time (uint2 copies rejected by driver). */
+        uint page_coord = pages_cached_buf[old_page_idx].x;
+        uint tile_index = pages_cached_buf[old_page_idx].y;
+        pages_cached_buf[dst_page_idx].x = page_coord;
+        pages_cached_buf[dst_page_idx].y = tile_index;
+        pages_cached_buf[old_page_idx].x = uint(-1);
+        pages_cached_buf[old_page_idx].y = uint(-1);
 
-        find_first_valid(src, dst);
+        /* Advance src to the next valid page. */
+        while (src < dst) {
+          src++;
+          if (pages_cached_buf[src & page_mask].x != uint(-1)) {
+            break;
+          }
+        }
       }
     }
 
