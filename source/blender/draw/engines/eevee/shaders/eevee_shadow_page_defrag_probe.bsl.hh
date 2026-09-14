@@ -304,6 +304,175 @@ void defrag_p2a([[resource_table]] PageAllocator &allocator,
 
 PipelineCompute page_defrag_p2a(defrag_p2a);
 
+/* P2B: p2a scalar compaction, but the inner find_first_valid nested while-loop is
+ * replaced by a straight pointer jump (`src = dst`). Isolates nested-loop hypothesis. */
+[[compute, local_size(1)]]
+void defrag_p2b([[resource_table]] PageAllocator &allocator,
+                [[resource_table]] ProbeCommands &cmds,
+                [[resource_table]] Statistics &stats)
+{
+  int additional_pages = allocator.pages_infos_buf.page_alloc_count -
+                         allocator.pages_infos_buf.page_free_count;
+  uint src = allocator.pages_infos_buf.page_cached_start;
+  uint end = allocator.pages_infos_buf.page_cached_end;
+
+  while (src < end) {
+    if (allocator.pages_cached_buf[src & SHADOW_MAX_PAGE_MASK].x != uint(-1u)) {
+      break;
+    }
+    src++;
+  }
+
+  while (additional_pages > 0 && src < end) {
+    uint cached_idx = src & SHADOW_MAX_PAGE_MASK;
+    uint tile_index = allocator.pages_cached_buf[cached_idx].y;
+    ShadowTileData tile = shadow_tile_unpack(allocator.tiles_buf[tile_index]);
+    allocator.page_cache_remove(tile);
+    allocator.page_free(tile);
+    allocator.tiles_buf[tile_index] = shadow_tile_pack(tile);
+
+    src++;
+    while (src < end) {
+      if (allocator.pages_cached_buf[src & SHADOW_MAX_PAGE_MASK].x != uint(-1u)) {
+        break;
+      }
+      src++;
+    }
+    additional_pages--;
+  }
+
+  /* Compaction: scalarized, NO nested inner loop (straight src jump). */
+  bool is_empty = (src == end);
+  if (!is_empty) {
+    for (uint dst = end - 1u; dst > src; dst--) {
+      if (allocator.pages_cached_buf[dst & SHADOW_MAX_PAGE_MASK].x != uint(-1u)) {
+        continue;
+      }
+      uint old_page_idx = src & SHADOW_MAX_PAGE_MASK;
+      uint dst_page_idx = dst & SHADOW_MAX_PAGE_MASK;
+      uint page_coord = allocator.pages_cached_buf[old_page_idx].x;
+      uint tile_index = allocator.pages_cached_buf[old_page_idx].y;
+      allocator.pages_cached_buf[dst_page_idx].x = page_coord;
+      allocator.pages_cached_buf[dst_page_idx].y = tile_index;
+      allocator.pages_cached_buf[old_page_idx].x = uint(-1u);
+      allocator.pages_cached_buf[old_page_idx].y = uint(-1u);
+
+      ShadowTileData tile = shadow_tile_unpack(allocator.tiles_buf[tile_index]);
+      tile.cache_index = dst_page_idx;
+      allocator.tiles_buf[tile_index] = shadow_tile_pack(tile);
+
+      src = dst;
+      src++;
+    }
+  }
+
+  allocator.pages_infos_buf.page_cached_start = src;
+  allocator.pages_infos_buf.page_cached_end = end;
+  allocator.pages_infos_buf.page_alloc_count = 0;
+
+  stats.statistics_buf.page_used_count = 0;
+  stats.statistics_buf.page_update_count = 0;
+  stats.statistics_buf.page_allocated_count = 0;
+  stats.statistics_buf.page_rendered_count = 0;
+  stats.statistics_buf.view_needed_count = 0;
+
+  cmds.clear_dispatch_buf.num_groups_x = SHADOW_PAGE_RES / SHADOW_PAGE_CLEAR_GROUP_SIZE;
+  cmds.clear_dispatch_buf.num_groups_y = SHADOW_PAGE_RES / SHADOW_PAGE_CLEAR_GROUP_SIZE;
+  cmds.clear_dispatch_buf.num_groups_z = 0;
+  cmds.tile_draw_buf.vertex_len = 0u;
+  cmds.tile_draw_buf.instance_len = 1u;
+  cmds.tile_draw_buf.vertex_first = 0u;
+  cmds.tile_draw_buf.instance_first = 0u;
+}
+
+PipelineCompute page_defrag_p2b(defrag_p2b);
+
+/* P2C: p2a scalar compaction, outer loop ASCENDING (dst++). Isolates descending/underflow. */
+[[compute, local_size(1)]]
+void defrag_p2c([[resource_table]] PageAllocator &allocator,
+                [[resource_table]] ProbeCommands &cmds,
+                [[resource_table]] Statistics &stats)
+{
+  int additional_pages = allocator.pages_infos_buf.page_alloc_count -
+                         allocator.pages_infos_buf.page_free_count;
+  uint src = allocator.pages_infos_buf.page_cached_start;
+  uint end = allocator.pages_infos_buf.page_cached_end;
+
+  while (src < end) {
+    if (allocator.pages_cached_buf[src & SHADOW_MAX_PAGE_MASK].x != uint(-1u)) {
+      break;
+    }
+    src++;
+  }
+
+  while (additional_pages > 0 && src < end) {
+    uint cached_idx = src & SHADOW_MAX_PAGE_MASK;
+    uint tile_index = allocator.pages_cached_buf[cached_idx].y;
+    ShadowTileData tile = shadow_tile_unpack(allocator.tiles_buf[tile_index]);
+    allocator.page_cache_remove(tile);
+    allocator.page_free(tile);
+    allocator.tiles_buf[tile_index] = shadow_tile_pack(tile);
+
+    src++;
+    while (src < end) {
+      if (allocator.pages_cached_buf[src & SHADOW_MAX_PAGE_MASK].x != uint(-1u)) {
+        break;
+      }
+      src++;
+    }
+    additional_pages--;
+  }
+
+  /* Compaction: scalarized, ASCENDING outer loop with nested find_first_valid kept. */
+  bool is_empty = (src == end);
+  if (!is_empty) {
+    for (uint dst = src + 1u; dst < end; dst++) {
+      if (allocator.pages_cached_buf[dst & SHADOW_MAX_PAGE_MASK].x != uint(-1u)) {
+        continue;
+      }
+      uint old_page_idx = src & SHADOW_MAX_PAGE_MASK;
+      uint dst_page_idx = dst & SHADOW_MAX_PAGE_MASK;
+      uint page_coord = allocator.pages_cached_buf[old_page_idx].x;
+      uint tile_index = allocator.pages_cached_buf[old_page_idx].y;
+      allocator.pages_cached_buf[dst_page_idx].x = page_coord;
+      allocator.pages_cached_buf[dst_page_idx].y = tile_index;
+      allocator.pages_cached_buf[old_page_idx].x = uint(-1u);
+      allocator.pages_cached_buf[old_page_idx].y = uint(-1u);
+
+      ShadowTileData tile = shadow_tile_unpack(allocator.tiles_buf[tile_index]);
+      tile.cache_index = dst_page_idx;
+      allocator.tiles_buf[tile_index] = shadow_tile_pack(tile);
+
+      while (src < dst) {
+        src++;
+        if (allocator.pages_cached_buf[src & SHADOW_MAX_PAGE_MASK].x != uint(-1u)) {
+          break;
+        }
+      }
+    }
+  }
+
+  allocator.pages_infos_buf.page_cached_start = src;
+  allocator.pages_infos_buf.page_cached_end = end;
+  allocator.pages_infos_buf.page_alloc_count = 0;
+
+  stats.statistics_buf.page_used_count = 0;
+  stats.statistics_buf.page_update_count = 0;
+  stats.statistics_buf.page_allocated_count = 0;
+  stats.statistics_buf.page_rendered_count = 0;
+  stats.statistics_buf.view_needed_count = 0;
+
+  cmds.clear_dispatch_buf.num_groups_x = SHADOW_PAGE_RES / SHADOW_PAGE_CLEAR_GROUP_SIZE;
+  cmds.clear_dispatch_buf.num_groups_y = SHADOW_PAGE_RES / SHADOW_PAGE_CLEAR_GROUP_SIZE;
+  cmds.clear_dispatch_buf.num_groups_z = 0;
+  cmds.tile_draw_buf.vertex_len = 0u;
+  cmds.tile_draw_buf.instance_len = 1u;
+  cmds.tile_draw_buf.vertex_first = 0u;
+  cmds.tile_draw_buf.instance_first = 0u;
+}
+
+PipelineCompute page_defrag_p2c(defrag_p2c);
+
 /* P3: p2 + new-range pop + wrap-around = full defrag replication. */
 [[compute, local_size(1)]]
 void defrag_p3([[resource_table]] PageAllocator &allocator,
