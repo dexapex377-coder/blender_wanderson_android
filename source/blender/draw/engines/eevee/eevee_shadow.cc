@@ -12,6 +12,7 @@
 
 #ifdef __ANDROID__
 #  include <unistd.h>
+#  include <android/log.h>
 #endif
 #include "GPU_batch_utils.hh"
 #include "GPU_compute.hh"
@@ -667,6 +668,34 @@ void ShadowModule::init()
     if (stats.view_needed_count > SHADOW_VIEW_MAX && enabled_) {
       inst_.info_append_i18n("Error: Too many shadow updates, some shadows might be incorrect.");
     }
+#ifdef __ANDROID__
+    {
+      static int shadow_diag_frame = 0;
+      ++shadow_diag_frame;
+      if (shadow_diag_frame % 30 == 0 || (stats.page_used_count > shadow_page_len_ && enabled_)) {
+        int shadowed_lights = 0;
+        for (const Light &light : inst_.lights.light_map_.values()) {
+          if (light.tilemap_index != LIGHT_NO_SHADOW) {
+            shadowed_lights++;
+          }
+        }
+        __android_log_print(ANDROID_LOG_INFO,
+                            "eevee_shadow",
+                            "init used=%d upd=%d alloc=%d rndr=%d views=%d len=%d "
+                            "| tilemaps=%d shadowed=%d casters=%d full_upd=%d",
+                            stats.page_used_count,
+                            stats.page_update_count,
+                            stats.page_allocated_count,
+                            stats.page_rendered_count,
+                            stats.view_needed_count,
+                            shadow_page_len_,
+                            (int)tilemap_pool.tilemaps_data.size(),
+                            shadowed_lights,
+                            (int)objects_.size(),
+                            do_full_update_);
+      }
+    }
+#endif
   }
 
   atlas_tx_.filter_mode(false);
@@ -839,6 +868,29 @@ void ShadowModule::end_sync()
     }
   }
   tilemap_pool.end_sync(*this);
+
+#ifdef __ANDROID__
+  {
+    static int sync_counter = 0;
+    ++sync_counter;
+    if (sync_counter % 30 == 0) {
+      int shadowed_lights = 0;
+      for (const Light &light : inst_.lights.light_map_.values()) {
+        if (light.tilemap_index != LIGHT_NO_SHADOW) {
+          shadowed_lights++;
+        }
+      }
+      __android_log_print(ANDROID_LOG_INFO,
+                          "eevee_shadow",
+                          "sync enabled=%d shadowed=%d tilemaps=%d casters=%d page_len=%d",
+                          enabled_,
+                          shadowed_lights,
+                          (int)tilemap_pool.tilemaps_data.size(),
+                          (int)objects_.size(),
+                          shadow_page_len_);
+    }
+  }
+#endif
 
   /* Search for deleted or updated shadow casters */
   auto it_end = objects_.items().end();
