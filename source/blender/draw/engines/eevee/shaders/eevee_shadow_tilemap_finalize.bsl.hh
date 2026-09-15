@@ -39,13 +39,12 @@ struct TilemapFinalize {
   [[storage(6, read)]] const ShadowTileMapClip (&tilemaps_clip_buf)[];
   [[image(0, write, UINT_32)]] uimage2D tilemaps_img;
 
-  /* DOWNSTREAM (Android): unsigned rect fields — signed atomicMin/atomicMax on shared int is
-   * the only construct unique to this shader vs working siblings and PowerVR miscompiles
-   * signed variants (cf. OpUMod). Box coords live in [0, 32] so unsigned is exact. */
-  [[shared]] uint rect_min_x;
-  [[shared]] uint rect_min_y;
-  [[shared]] uint rect_max_x;
-  [[shared]] uint rect_max_y;
+  /* DOWNSTREAM (Android): bisect A. Rect reduction kept but WITHOUT the loop barriers (see
+   * tilemap_finalize_main). Signed types only (atomicUMin/UMax do not compile here). */
+  [[shared]] int rect_min_x;
+  [[shared]] int rect_min_y;
+  [[shared]] int rect_max_x;
+  [[shared]] int rect_max_y;
   [[shared]] uint lod_rendered;
 };
 
@@ -86,13 +85,11 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
 
     /* Compute update area. */
     if (local_index == 0u) {
-      srt.rect_min_x = uint(SHADOW_TILEMAP_RES);
-      srt.rect_min_y = uint(SHADOW_TILEMAP_RES);
-      srt.rect_max_x = 0u;
-      srt.rect_max_y = 0u;
+      srt.rect_min_x = SHADOW_TILEMAP_RES;
+      srt.rect_min_y = SHADOW_TILEMAP_RES;
+      srt.rect_max_x = 0;
+      srt.rect_max_y = 0;
     }
-
-    barrier();
 
     ShadowTileData tile = shadow_tile_unpack(srt.tiles_buf[tile_index]);
     bool lod_valid_thread = all(equal(tile_co, tile_co_lod << lod));
@@ -106,21 +103,19 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
       }
     }
     if (do_page_render) {
-      atomicUMin(srt.rect_min_x, uint(tile_co_lod.x));
-      atomicUMin(srt.rect_min_y, uint(tile_co_lod.y));
-      atomicUMax(srt.rect_max_x, uint(tile_co_lod.x + 1));
-      atomicUMax(srt.rect_max_y, uint(tile_co_lod.y + 1));
+      atomicMin(srt.rect_min_x, tile_co_lod.x);
+      atomicMin(srt.rect_min_y, tile_co_lod.y);
+      atomicMax(srt.rect_max_x, tile_co_lod.x + 1);
+      atomicMax(srt.rect_max_y, tile_co_lod.y + 1);
     }
 
-    barrier();
-
-    /* DOWNSTREAM (Android): bisect stage bit 0 (rect reduction bar. crossed). */
+    /* DOWNSTREAM (Android): bisect stage bit 0 (rect reduction crossed, NO loop barrier). */
     if (local_index == 0u) {
-      atomicAdd(srt.statistics_buf.diag_finalize_groups, 1u);
+      atomicAdd(srt.statistics_buf.diag_finalize_groups, 1);
     }
 
-    int2 rect_min = int2(int(srt.rect_min_x), int(srt.rect_min_y));
-    int2 rect_max = int2(int(srt.rect_max_x), int(srt.rect_max_y));
+    int2 rect_min = int2(srt.rect_min_x, srt.rect_min_y);
+    int2 rect_max = int2(srt.rect_max_x, srt.rect_max_y);
 
     int viewport_index = viewport_select(rect_max - rect_min);
     int2 viewport_size = shadow_viewport_size_get(uint(viewport_index));
@@ -189,7 +184,7 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
     }
     /* DOWNSTREAM (Android): bisect stage bit 1 (view-issue block ran). */
     if (local_index == 0u) {
-      atomicAdd(srt.statistics_buf.diag_finalize_groups, (1u << 1u));
+      atomicAdd(srt.statistics_buf.diag_finalize_groups, (1 << 1));
     }
   }
 
@@ -227,7 +222,7 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
 
   if (local_index == 0u) {
     /* DOWNSTREAM (Android): bisect stage bit 2 (tail reached). */
-    atomicAdd(srt.statistics_buf.diag_finalize_groups, (1u << 2u));
+    atomicAdd(srt.statistics_buf.diag_finalize_groups, (1 << 2));
     atomicAdd(srt.pages_infos_buf._pad1, 1);
   }
   atomicAdd(srt.statistics_buf.diag_finalize_used, int(diag_used));
