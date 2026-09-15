@@ -24,6 +24,8 @@
 #include "draw_cache.hh"
 #include "draw_debug.hh"
 
+#include "eevee_shadow_shared.hh"
+
 namespace blender::eevee {
 
 /* -------------------------------------------------------------------- */
@@ -702,6 +704,136 @@ void ShadowModule::init()
                             pages_infos_data_._pad0,
                             pages_infos_data_._pad1,
                             pages_infos_data_._pad2);
+
+        {
+          int tilemap_idx = -1;
+          for (const Light &light : inst_.lights.light_map_.values()) {
+            if (light.tilemap_index != LIGHT_NO_SHADOW) {
+              tilemap_idx = light.tilemap_index;
+              break;
+            }
+          }
+
+          static uint *rmap_host = nullptr;
+          static uint *tiles_cached = nullptr;
+          if (rmap_host == nullptr) {
+            rmap_host = (uint *)MEM_mallocN(sizeof(uint) * SHADOW_RENDER_MAP_SIZE, "rmap_diag");
+            tiles_cached = (uint *)MEM_mallocN(sizeof(uint) * SHADOW_MAX_TILE, "tiles_diag");
+          }
+
+          GPU_storagebuf_read(render_map_buf_, rmap_host);
+          int total_valid_rmap = 0;
+          int view0_nonempty = 0;
+          uint rmin = 0xFFFFFFFFu, rmax = 0u;
+          for (int i = 0; i < SHADOW_RENDER_MAP_SIZE; i++) {
+            uint v = rmap_host[i];
+            if (v != 0xFFFFFFFFu) {
+              total_valid_rmap++;
+              if (i < SHADOW_TILEMAP_LOD0_LEN) {
+                view0_nonempty++;
+              }
+              rmin = (v < rmin) ? v : rmin;
+              rmax = (v > rmax) ? v : rmax;
+            }
+          }
+
+          static bool deep_done = false;
+          if (!deep_done && tilemap_idx >= 0) {
+            deep_done = true;
+            GPU_storagebuf_read(tilemap_pool.tiles_data, tiles_cached);
+            const ShadowTileMapData &tm = tilemap_pool.tilemaps_data.data()[tilemap_idx];
+            int shown = 0;
+            uint used_pages[4] = {0, 0, 0, 0};
+            int txs[4] = {0, 0, 0, 0};
+            int tys[4] = {0, 0, 0, 0};
+            for (int ty = 0; ty < SHADOW_TILEMAP_RES && shown < 4; ty++) {
+              for (int tx = 0; tx < SHADOW_TILEMAP_RES && shown < 4; tx++) {
+                uint packed = tiles_cached[tm.tiles_index + ty * SHADOW_TILEMAP_RES + tx];
+                ShadowTileData td = shadow_tile_unpack(packed);
+                if (td.is_used) {
+                  used_pages[shown] = shadow_page_pack(td.page);
+                  txs[shown] = tx;
+                  tys[shown] = ty;
+                  shown++;
+                }
+              }
+            }
+            char line[512];
+            int off = 0;
+            for (int k = 0; k < shown; k++) {
+              uint3 page = shadow_page_unpack(used_pages[k]);
+              uint packed = tiles_cached[tm.tiles_index + tys[k] * SHADOW_TILEMAP_RES + txs[k]];
+              int n = snprintf(line + off,
+                               sizeof(line) - (size_t)off,
+                               " t(%d,%d)=0x%08x p=(%u,%u,%u)",
+                               txs[k],
+                               tys[k],
+                               packed,
+                               page.x,
+                               page.y,
+                               page.z);
+              if (n > 0) {
+                off += n;
+              }
+            }
+            __android_log_print(ANDROID_LOG_INFO,
+                                "eevee_shadow",
+                                "DEEP tm=%d rm_v0=%d rm_tot=%d rm=[%08x..%08x]%s",
+                                tilemap_idx,
+                                view0_nonempty,
+                                total_valid_rmap,
+                                rmin,
+                                rmax,
+                                line);
+
+            if (shown > 0) {
+              const int aw = GPU_texture_width(&atlas_tx_);
+              const int ah = GPU_texture_height(&atlas_tx_);
+              const int al = GPU_texture_layer_count(&atlas_tx_);
+              void *atlas = GPU_texture_read(&atlas_tx_, GPU_DATA_UINT, 0);
+              if (atlas != nullptr) {
+                const uint *au = static_cast<const uint *>(atlas);
+                for (int k = 0; k < shown; k++) {
+                  uint3 page = shadow_page_unpack(used_pages[k]);
+                  const int px = int(page.x) * SHADOW_PAGE_RES;
+                  const int py = int(page.y) * SHADOW_PAGE_RES;
+                  const int pl = int(page.z);
+                  if (px + SHADOW_PAGE_RES > aw || py + SHADOW_PAGE_RES > ah ||
+                      pl >= al)
+                  {
+                    continue;
+                  }
+                  int non_max = 0;
+                  uint vmin = 0xFFFFFFFFu, vmax = 0u;
+                  for (int y = 0; y < SHADOW_PAGE_RES; y++) {
+                    for (int x = 0; x < SHADOW_PAGE_RES; x++) {
+                      uint v = au[(size_t(pl) * ah + py + y) * aw + px + x];
+                      if (v != 0x7F800000u) {
+                        non_max++;
+                        vmin = (v < vmin) ? v : vmin;
+                        vmax = (v > vmax) ? v : vmax;
+                      }
+                    }
+                  }
+                  __android_log_print(ANDROID_LOG_INFO,
+                                      "eevee_shadow",
+                                      "ATLAS page=(%u,%u,%u) non_max=%d/%d vmin=%08x vmax=%08x",
+                                      page.x,
+                                      page.y,
+                                      page.z,
+                                      non_max,
+                                      SHADOW_PAGE_RES * SHADOW_PAGE_RES,
+                                      vmin,
+                                      vmax);
+                }
+                MEM_freeN(atlas);
+              }
+              else {
+                __android_log_print(ANDROID_LOG_INFO, "eevee_shadow", "ATLAS read failed");
+              }
+            }
+          }
+        }
       }
     }
 #endif
