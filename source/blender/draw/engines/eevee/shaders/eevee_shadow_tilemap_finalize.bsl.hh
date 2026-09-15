@@ -39,10 +39,13 @@ struct TilemapFinalize {
   [[storage(6, read)]] const ShadowTileMapClip (&tilemaps_clip_buf)[];
   [[image(0, write, UINT_32)]] uimage2D tilemaps_img;
 
-  [[shared]] int rect_min_x;
-  [[shared]] int rect_min_y;
-  [[shared]] int rect_max_x;
-  [[shared]] int rect_max_y;
+  /* DOWNSTREAM (Android): unsigned rect fields — signed atomicMin/atomicMax on shared int is
+   * the only construct unique to this shader vs working siblings and PowerVR miscompiles
+   * signed variants (cf. OpUMod). Box coords live in [0, 32] so unsigned is exact. */
+  [[shared]] uint rect_min_x;
+  [[shared]] uint rect_min_y;
+  [[shared]] uint rect_max_x;
+  [[shared]] uint rect_max_y;
   [[shared]] uint lod_rendered;
 };
 
@@ -59,16 +62,182 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
                            [[local_invocation_index]] const uint local_index)
 
 {
-  /* DOWNSTREAM (Android): TRIVIAL BODY probe. Finalize workgroups never start (finS=0 with
-   * allocG>0 in prior builds). If this fires, the pipeline schedules fine and the full body
-   * is what trips the driver. If it does not, the driver refuses to schedule this pipeline
-   * even with an empty body. */
+  int tilemap_index = int(global_id.z);
+  int2 tile_co = int2(global_id.xy);
+
+  /* DOWNSTREAM (Android): entry marker for driver bisect. If this fires but the tail markers
+   * (diag_finalize_groups / _pad1) do not, the shader starts and dies mid-body. */
   if (local_index == 0u) {
     atomicAdd(srt.pages_infos_buf._pad2, 1);
-    atomicAdd(srt.statistics_buf.diag_finalize_groups, 1);
+  }
+
+  ShadowTileMapData tilemap_data = srt.tilemaps_buf[tilemap_index];
+  bool is_cubemap = (tilemap_data.projection_type == SHADOW_PROJECTION_CUBEFACE);
+  int lod_max = is_cubemap ? SHADOW_TILEMAP_LOD : 0;
+
+  srt.lod_rendered = 0u;
+
+  uint diag_used = 0u;
+  uint diag_update = 0u;
+
+  for (int lod = lod_max; lod >= 0; lod--) {
+    int2 tile_co_lod = tile_co >> lod;
+    int tile_index = shadow_tile_offset(uint2(tile_co_lod), tilemap_data.tiles_index, lod);
+
+    /* Compute update area. */
+    if (local_index == 0u) {
+      srt.rect_min_x = uint(SHADOW_TILEMAP_RES);
+      srt.rect_min_y = uint(SHADOW_TILEMAP_RES);
+      srt.rect_max_x = 0u;
+      srt.rect_max_y = 0u;
+    }
+
+    barrier();
+
+    ShadowTileData tile = shadow_tile_unpack(srt.tiles_buf[tile_index]);
+    bool lod_valid_thread = all(equal(tile_co, tile_co_lod << lod));
+    bool do_page_render = tile.is_used && tile.do_update && lod_valid_thread;
+    if (lod_valid_thread) {
+      if (tile.is_used) {
+        diag_used++;
+      }
+      if (tile.do_update) {
+        diag_update++;
+      }
+    }
+    if (do_page_render) {
+      atomicUMin(srt.rect_min_x, uint(tile_co_lod.x));
+      atomicUMin(srt.rect_min_y, uint(tile_co_lod.y));
+      atomicUMax(srt.rect_max_x, uint(tile_co_lod.x + 1));
+      atomicUMax(srt.rect_max_y, uint(tile_co_lod.y + 1));
+    }
+
+    barrier();
+
+    /* DOWNSTREAM (Android): bisect stage bit 0 (rect reduction bar. crossed). */
+    if (local_index == 0u) {
+      atomicAdd(srt.statistics_buf.diag_finalize_groups, 1u);
+    }
+
+    int2 rect_min = int2(int(srt.rect_min_x), int(srt.rect_min_y));
+    int2 rect_max = int2(int(srt.rect_max_x), int(srt.rect_max_y));
+
+    int viewport_index = viewport_select(rect_max - rect_min);
+    int2 viewport_size = shadow_viewport_size_get(uint(viewport_index));
+
+    /* Issue one view if there is an update in the LOD. */
+    if (local_index == 0u) {
+      bool lod_has_update = rect_min.x < rect_max.x;
+      if (lod_has_update) {
+        int view_index = atomicAdd(srt.statistics_buf.view_needed_count, 1);
+        if (view_index < SHADOW_VIEW_MAX) {
+          srt.lod_rendered |= 1u << lod;
+
+          /* Setup the view. */
+          srt.view_infos_buf[view_index].viewmat = tilemap_data.viewmat;
+          srt.view_infos_buf[view_index].viewinv = inverse(tilemap_data.viewmat);
+
+          float lod_res = float(SHADOW_TILEMAP_RES >> lod);
+
+          /* TODO(fclem): These should be the culling planes. */
+          // float2 cull_region_start = (float2(rect_min) / lod_res) * 2.0f - 1.0f;
+          // float2 cull_region_end = (float2(rect_max) / lod_res) * 2.0f - 1.0f;
+          float2 view_start = (float2(rect_min) / lod_res) * 2.0f - 1.0f;
+          float2 view_end = (float2(rect_min + viewport_size) / lod_res) * 2.0f - 1.0f;
+
+          int clip_index = tilemap_data.clip_data_index;
+          float clip_far = srt.tilemaps_clip_buf[clip_index].clip_far_stored;
+          float clip_near = srt.tilemaps_clip_buf[clip_index].clip_near_stored;
+
+          view_start = view_start * tilemap_data.half_size + tilemap_data.center_offset;
+          view_end = view_end * tilemap_data.half_size + tilemap_data.center_offset;
+
+          float4x4 winmat;
+          if (tilemap_data.projection_type != SHADOW_PROJECTION_CUBEFACE) {
+            winmat = projection_orthographic(
+                view_start.x, view_end.x, view_start.y, view_end.y, clip_near, clip_far);
+          }
+          else {
+            winmat = projection_perspective(
+                view_start.x, view_end.x, view_start.y, view_end.y, clip_near, clip_far);
+          }
+
+          srt.view_infos_buf[view_index].winmat = winmat;
+          srt.view_infos_buf[view_index].wininv = inverse(winmat);
+
+          srt.render_view_buf[view_index].viewport_index = uint(viewport_index);
+          srt.render_view_buf[view_index].is_directional = !is_cubemap;
+          srt.render_view_buf[view_index].clip_near = clip_near;
+          /* Clipping setup. */
+          if (is_point_light(tilemap_data.light_type)) {
+            /* Clip as a sphere around the clip_near cube. */
+            srt.render_view_buf[view_index].clip_distance_inv = M_SQRT1_3 / tilemap_data.clip_near;
+          }
+          else {
+            /* Disable local clipping. */
+            srt.render_view_buf[view_index].clip_distance_inv = 0.0f;
+          }
+          /* For building the render map. */
+          srt.render_view_buf[view_index].tilemap_tiles_index = tilemap_data.tiles_index;
+          srt.render_view_buf[view_index].tilemap_lod = lod;
+          srt.render_view_buf[view_index].rect_min = rect_min;
+          /* For shadow linking. */
+          srt.render_view_buf[view_index].shadow_set_membership =
+              tilemap_data.shadow_set_membership;
+        }
+      }
+    }
+    /* DOWNSTREAM (Android): bisect stage bit 1 (view-issue block ran). */
+    if (local_index == 0u) {
+      atomicAdd(srt.statistics_buf.diag_finalize_groups, (1u << 1u));
+    }
+  }
+
+  /* Broadcast result of `lod_rendered`. */
+  barrier();
+
+  /* With all threads (LOD0 size dispatch) load each lod tile from the highest lod
+   * to the lowest, keeping track of the lowest one allocated which will be use for shadowing.
+   * This guarantee a O(1) lookup time.
+   * Add one render view per LOD that has tiles to be rendered. */
+  int valid_tile_index = -1;
+  uint valid_lod = 0u;
+  for (int lod = lod_max; lod >= 0; lod--) {
+    int2 tile_co_lod = tile_co >> lod;
+    int tile_index = shadow_tile_offset(uint2(tile_co_lod), tilemap_data.tiles_index, lod);
+    ShadowTileData tile = shadow_tile_unpack(srt.tiles_buf[tile_index]);
+
+    bool lod_is_rendered = ((srt.lod_rendered >> lod) & 1u) == 1u;
+    if (tile.is_used && tile.is_allocated && (!tile.do_update || lod_is_rendered)) {
+      /* Save highest lod for this thread. */
+      valid_tile_index = tile_index;
+      valid_lod = uint(lod);
+    }
+  }
+
+  /* Store the highest LOD valid page for rendering. */
+  ShadowTileDataPacked tile_packed = (valid_tile_index != -1) ? srt.tiles_buf[valid_tile_index] :
+                                                                SHADOW_NO_DATA;
+  ShadowTileData tile_data = shadow_tile_unpack(tile_packed);
+  ShadowSamplingTile tile_sampling = shadow_sampling_tile_create(tile_data, valid_lod);
+  ShadowSamplingTilePacked tile_sampling_packed = shadow_sampling_tile_pack(tile_sampling);
+
+  uint2 atlas_texel = shadow_tile_coord_in_atlas(uint2(tile_co), tilemap_index);
+  imageStoreFast(srt.tilemaps_img, int2(atlas_texel), uint4(tile_sampling_packed));
+
+  if (local_index == 0u) {
+    /* DOWNSTREAM (Android): bisect stage bit 2 (tail reached). */
+    atomicAdd(srt.statistics_buf.diag_finalize_groups, (1u << 2u));
+    atomicAdd(srt.pages_infos_buf._pad1, 1);
+  }
+  atomicAdd(srt.statistics_buf.diag_finalize_used, int(diag_used));
+  atomicAdd(srt.statistics_buf.diag_finalize_update, int(diag_update));
+
+  if (all(equal(global_id, uint3(0)))) {
+    /* Clamp it as it can underflow if there is too much tile present on screen. */
+    srt.pages_infos_buf.page_free_count = max(srt.pages_infos_buf.page_free_count, 0);
   }
 }
-
 
 struct RendermapFinalize {
   [[storage(0, read_write)]] ShadowStatistics &statistics_buf;
