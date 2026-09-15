@@ -62,6 +62,12 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
   int tilemap_index = int(global_id.z);
   int2 tile_co = int2(global_id.xy);
 
+  /* DOWNSTREAM (Android): entry marker for driver bisect. If this fires but the tail markers
+   * (diag_finalize_groups / _pad1) do not, the shader starts and dies mid-body. */
+  if (local_index == 0u) {
+    atomicAdd(srt.pages_infos_buf._pad2, 1);
+  }
+
   ShadowTileMapData tilemap_data = srt.tilemaps_buf[tilemap_index];
   bool is_cubemap = (tilemap_data.projection_type == SHADOW_PROJECTION_CUBEFACE);
   int lod_max = is_cubemap ? SHADOW_TILEMAP_LOD : 0;
