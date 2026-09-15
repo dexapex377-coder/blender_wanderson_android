@@ -679,10 +679,13 @@ void ShadowModule::init()
             shadowed_lights++;
           }
         }
+        pages_infos_data_.read();
         __android_log_print(ANDROID_LOG_INFO,
                             "eevee_shadow",
                             "init used=%d upd=%d alloc=%d rndr=%d views=%d len=%d "
-                            "| tilemaps=%d shadowed=%d casters=%d full_upd=%d",
+                            "| tilemaps=%d shadowed=%d casters=%d full_upd=%d"
+                            "| fin:used=%d upd=%d grp=%d"
+                            "| allocG=%d finG=%d",
                             stats.page_used_count,
                             stats.page_update_count,
                             stats.page_allocated_count,
@@ -692,7 +695,12 @@ void ShadowModule::init()
                             (int)tilemap_pool.tilemaps_data.size(),
                             shadowed_lights,
                             (int)objects_.size(),
-                            do_full_update_);
+                            do_full_update_,
+                            stats.diag_finalize_used,
+                            stats.diag_finalize_update,
+                            stats.diag_finalize_groups,
+                            pages_infos_data_._pad0,
+                            pages_infos_data_._pad1);
       }
     }
 #endif

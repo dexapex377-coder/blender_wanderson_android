@@ -167,9 +167,9 @@ struct [[host_shared]] ShadowStatistics {
   int page_allocated_count;
   int page_rendered_count;
   int view_needed_count;
-  int _pad0;
-  int _pad1;
-  int _pad2;
+  int diag_finalize_used;
+  int diag_finalize_update;
+  int diag_finalize_groups;
 };
 
 /** Decoded tile data structure. */

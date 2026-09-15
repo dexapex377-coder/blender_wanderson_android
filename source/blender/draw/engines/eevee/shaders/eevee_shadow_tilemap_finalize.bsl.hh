@@ -68,6 +68,9 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
 
   srt.lod_rendered = 0u;
 
+  uint diag_used = 0u;
+  uint diag_update = 0u;
+
   for (int lod = lod_max; lod >= 0; lod--) {
     int2 tile_co_lod = tile_co >> lod;
     int tile_index = shadow_tile_offset(uint2(tile_co_lod), tilemap_data.tiles_index, lod);
@@ -85,6 +88,14 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
     ShadowTileData tile = shadow_tile_unpack(srt.tiles_buf[tile_index]);
     bool lod_valid_thread = all(equal(tile_co, tile_co_lod << lod));
     bool do_page_render = tile.is_used && tile.do_update && lod_valid_thread;
+    if (lod_valid_thread) {
+      if (tile.is_used) {
+        diag_used++;
+      }
+      if (tile.do_update) {
+        diag_update++;
+      }
+    }
     if (do_page_render) {
       atomicMin(srt.rect_min_x, tile_co_lod.x);
       atomicMin(srt.rect_min_y, tile_co_lod.y);
@@ -195,6 +206,13 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
 
   uint2 atlas_texel = shadow_tile_coord_in_atlas(uint2(tile_co), tilemap_index);
   imageStoreFast(srt.tilemaps_img, int2(atlas_texel), uint4(tile_sampling_packed));
+
+  if (local_index == 0u) {
+    atomicAdd(srt.statistics_buf.diag_finalize_groups, 1);
+    atomicAdd(srt.pages_infos_buf._pad1, 1);
+  }
+  atomicAdd(srt.statistics_buf.diag_finalize_used, int(diag_used));
+  atomicAdd(srt.statistics_buf.diag_finalize_update, int(diag_update));
 
   if (all(equal(global_id, uint3(0)))) {
     /* Clamp it as it can underflow if there is too much tile present on screen. */
