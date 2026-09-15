@@ -1403,6 +1403,10 @@ void ShadowModule::render(View &view, int2 extent)
     GPU_debug_group_begin("Shadow");
     {
       GPU_uniformbuf_clear_to_zero(shadow_multi_view_.matrices_ubo_get());
+      /* DOWNSTREAM (Android): port upstream c394b602b67e "EEVEE: Shadow: Clear rendermap to
+       * invalid pages" (multi-viewport workaround). The whole rendermap is cleared once so
+       * stale pages from previous frames / non-updated tilemaps are never drawn. */
+      GPU_storagebuf_clear(render_map_buf_, 0xFFFFFFFFu);
 
       run_tagging_ = (loop_count == 0);
 
