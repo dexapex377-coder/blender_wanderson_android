@@ -1462,8 +1462,7 @@ void ShadowModule::render(View &view, int2 extent)
 
 #ifdef __ANDROID__
       {
-        /* PASO-2 bisect: GPU_finish() commented (sync-barrier isolation test). */
-        // GPU_finish();
+        GPU_finish();
         statistics_buf_.current().async_flush_to_host();
         statistics_buf_.current().read();
         const ShadowStatistics &post_stats = statistics_buf_.current();
