@@ -16,7 +16,6 @@
 #endif
 #include "GPU_batch_utils.hh"
 #include "GPU_compute.hh"
-#include "MEM_guardedalloc.h"
 
 #include "GPU_context.hh"
 #include "eevee_instance.hh"
@@ -788,55 +787,49 @@ void ShadowModule::init()
                                 line);
 
             if (shown > 0) {
-              gpu::Texture *page_slice = atlas_tx_.layer_range_view(0, 1);
-              if (page_slice != nullptr) {
-                int sw = GPU_texture_width(page_slice); /* 2048 (page 0 layer) */
-                int sh = GPU_texture_height(page_slice);
-                int sl = GPU_texture_layer_count(page_slice);
-                void *slice = GPU_texture_read(page_slice, GPU_DATA_UINT, 0);
-                if (slice != nullptr) {
-                  const uint *au = static_cast<const uint *>(slice);
-                  /* Read back only the layer that holds the used pages (probe: page.z==0). */
-                  for (int k = 0; k < shown && k < 4; k++) {
-                    uint3 page = shadow_page_unpack(used_pages[k]);
-                    const int px = int(page.x) * SHADOW_PAGE_RES;
-                    const int py = int(page.y) * SHADOW_PAGE_RES;
-                    if (px + SHADOW_PAGE_RES > sw || py + SHADOW_PAGE_RES > sh ||
-                        int(page.z) >= sl)
-                    {
-                      continue;
-                    }
-                    int non_max = 0;
-                    uint vmin = 0xFFFFFFFFu, vmax = 0u;
-                    for (int y = 0; y < SHADOW_PAGE_RES; y++) {
-                      for (int x = 0; x < SHADOW_PAGE_RES; x++) {
-                        uint v = au[(size_t(py + y) * sw + (px + x))];
-                        if (v != 0x7F800000u) {
-                          non_max++;
-                          vmin = (v < vmin) ? v : vmin;
-                          vmax = (v > vmax) ? v : vmax;
-                        }
+              const int aw = GPU_texture_width(&atlas_tx_);
+              const int ah = GPU_texture_height(&atlas_tx_);
+              const int al = GPU_texture_layer_count(&atlas_tx_);
+              void *atlas = GPU_texture_read(&atlas_tx_, GPU_DATA_UINT, 0);
+              if (atlas != nullptr) {
+                const uint *au = static_cast<const uint *>(atlas);
+                for (int k = 0; k < shown; k++) {
+                  uint3 page = shadow_page_unpack(used_pages[k]);
+                  const int px = int(page.x) * SHADOW_PAGE_RES;
+                  const int py = int(page.y) * SHADOW_PAGE_RES;
+                  const int pl = int(page.z);
+                  if (px + SHADOW_PAGE_RES > aw || py + SHADOW_PAGE_RES > ah ||
+                      pl >= al)
+                  {
+                    continue;
+                  }
+                  int non_max = 0;
+                  uint vmin = 0xFFFFFFFFu, vmax = 0u;
+                  for (int y = 0; y < SHADOW_PAGE_RES; y++) {
+                    for (int x = 0; x < SHADOW_PAGE_RES; x++) {
+                      uint v = au[(size_t(pl) * ah + py + y) * aw + px + x];
+                      if (v != 0x7F800000u) {
+                        non_max++;
+                        vmin = (v < vmin) ? v : vmin;
+                        vmax = (v > vmax) ? v : vmax;
                       }
                     }
-                    __android_log_print(ANDROID_LOG_INFO,
-                                        "eevee_shadow",
-                                        "ATLAS page=(%u,%u,%u) non_max=%d/%d vmin=%08x vmax=%08x",
-                                        page.x,
-                                        page.y,
-                                        page.z,
-                                        non_max,
-                                        SHADOW_PAGE_RES * SHADOW_PAGE_RES,
-                                        vmin,
-                                        vmax);
                   }
-                  MEM_freeN(slice);
+                  __android_log_print(ANDROID_LOG_INFO,
+                                      "eevee_shadow",
+                                      "ATLAS page=(%u,%u,%u) non_max=%d/%d vmin=%08x vmax=%08x",
+                                      page.x,
+                                      page.y,
+                                      page.z,
+                                      non_max,
+                                      SHADOW_PAGE_RES * SHADOW_PAGE_RES,
+                                      vmin,
+                                      vmax);
                 }
-                else {
-                  __android_log_print(ANDROID_LOG_INFO, "eevee_shadow", "ATLAS read failed");
-                }
+                MEM_freeN(atlas);
               }
               else {
-                __android_log_print(ANDROID_LOG_INFO, "eevee_shadow", "ATLAS slice view failed");
+                __android_log_print(ANDROID_LOG_INFO, "eevee_shadow", "ATLAS read failed");
               }
             }
           }
