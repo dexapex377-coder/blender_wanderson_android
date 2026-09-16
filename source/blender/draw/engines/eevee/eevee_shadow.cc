@@ -21,6 +21,7 @@
 #include "eevee_instance.hh"
 
 #include "GPU_debug.hh"
+#include "GPU_state.hh"
 #include "draw_cache.hh"
 #include "draw_debug.hh"
 
@@ -1439,7 +1440,41 @@ void ShadowModule::render(View &view, int2 extent)
       GPU_framebuffer_multi_viewports_set(render_fb_,
                                           reinterpret_cast<int (*)[4]>(multi_viewports_.data()));
 
+#ifdef __ANDROID__
+      {
+        static uint rendermap_readback[SHADOW_RENDER_MAP_SIZE];
+        GPU_storagebuf_read(render_map_buf_, rendermap_readback);
+        uint n_pages = 0;
+        for (uint i = 0; i < SHADOW_RENDER_MAP_SIZE; i++) {
+          if (rendermap_readback[i] != 0xFFFFFFFFu) {
+            n_pages++;
+          }
+        }
+        __android_log_print(ANDROID_LOG_INFO,
+                            "eevee_shadow",
+                            "SHADOW-RENDER pre loop=%d N=%u",
+                            loop_count,
+                            n_pages);
+      }
+#endif
+
       inst_.pipelines.shadow.render(shadow_multi_view_);
+
+#ifdef __ANDROID__
+      {
+        GPU_finish();
+        statistics_buf_.current().async_flush_to_host();
+        statistics_buf_.current().read();
+        const ShadowStatistics &post_stats = statistics_buf_.current();
+        __android_log_print(ANDROID_LOG_INFO,
+                            "eevee_shadow",
+                            "SHADOW-RENDER post loop=%d rndr=%d alloc=%d upd=%d",
+                            loop_count,
+                            post_stats.page_rendered_count,
+                            post_stats.page_allocated_count,
+                            post_stats.page_update_count);
+      }
+#endif
 
       if (use_flush) {
         GPU_flush();
