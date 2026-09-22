@@ -75,7 +75,7 @@
 
 #ifdef WITH_GHOST_ANDROID
 #  include "engines/eevee/eevee_instance.hh"
-#  include "engines/eevee/eevee_engine.hh"
+#  include "engines/eevee/eevee_engine.h"
 #  include <android/log.h>
 #  include <android_native_app_glue.h>
 #  include <jni.h>
