@@ -52,7 +52,8 @@
             android:launchMode="singleTask"
             android:screenOrientation="user"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|density|navigation|uiMode"
-            android:exported="true">
+            android:exported="true"
+            android:threadStackSize="8388608">
             <meta-data android:name="android.app.lib_name" android:value="blender" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
