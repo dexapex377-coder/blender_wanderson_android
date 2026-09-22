@@ -75,6 +75,13 @@
 
 #ifdef WITH_GHOST_ANDROID
 #  include "engines/eevee/eevee_instance.hh"
+#  include "engines/eevee/eevee_engine.hh"
+#  include <android/log.h>
+#  include <android_native_app_glue.h>
+#  include <jni.h>
+#  include <chrono>
+#  include <cstdio>
+#  include "GHOST_SystemAndroid.hh"
 #endif
 
 #include "ED_datafiles.h"
@@ -334,11 +341,206 @@ extern "C" int GHOST_HACK_getFirstFile(char buf[]);
  *   or exit immediately when running in background-mode.
  */
 #ifdef WITH_GHOST_ANDROID
+/**
+ * Blender's main function responsibilities are:
+ * - setup subsystems.
+ * - handle arguments.
+ * - run #WM_main() event loop,
+ *   or exit immediately when running in background-mode.
+ */
+#ifdef WITH_GHOST_ANDROID
 /* Android owns the frame loop; the NativeActivity glue calls this to init. */
 namespace blender {
 void GHOST_androidfinalize(bContext *C);
 int GHOST_android_launch(int argc, const char **argv);
 }  // namespace blender
+
+/* ---- Shader warmup for Android (Phase 2-4) ---- */
+
+namespace blender {
+namespace eevee {
+
+/* JNI helper: get JNIEnv from the Android app. */
+static JNIEnv *shader_warmup_jni_env(android_app *app)
+{
+  if (!app || !app->activity || !app->activity->vm) {
+    return nullptr;
+  }
+  JavaVM *vm = app->activity->vm;
+  JNIEnv *env = nullptr;
+  if (vm->GetEnv((void **)&env, JNI_VERSION_1_6) == JNI_OK) {
+    return env;
+  }
+  return vm->AttachCurrentThread(&env, nullptr) == JNI_OK ? env : nullptr;
+}
+
+/* JNI callback: report shader compilation progress to Java. */
+static void shader_warmup_call_progress(android_app *app, int current, int total)
+{
+  JNIEnv *env = nullptr;
+  if (!app || !app->activity || !app->activity->vm) {
+    return;
+  }
+  JavaVM *vm = app->activity->vm;
+  JNIEnv *env_local = nullptr;
+  if (vm->GetEnv((void **)&env_local, JNI_VERSION_1_6) == JNI_OK) {
+    env = env_local;
+  }
+  else if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+    return;
+  }
+  if (!env || !app->activity->clazz) {
+    return;
+  }
+  jobject activity = app->activity->clazz;
+  jclass clazz = env->GetObjectClass(activity);
+  if (!clazz) {
+    return;
+  }
+  jmethodID mid = env->GetMethodID(clazz, "onShaderProgress", "(II)V");
+  if (!mid) {
+    env->ExceptionClear();
+    return;
+  }
+  env->CallVoidMethod(activity, mid, current, total);
+}
+
+/* JNI callback: signal that all shaders are ready. */
+static void shader_warmup_call_ready(android_app *app)
+{
+  JNIEnv *env = nullptr;
+  if (!app || !app->activity || !app->activity->vm) {
+    return;
+  }
+  JavaVM *vm = app->activity->vm;
+  JNIEnv *env_local = nullptr;
+  if (vm->GetEnv((void **)&env_local, JNI_VERSION_1_6) == JNI_OK) {
+    env = env_local;
+  }
+  else if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+    return;
+  }
+  if (!env || !app->activity->clazz) {
+    return;
+  }
+  jobject activity = app->activity->clazz;
+  jclass clazz = env->GetObjectClass(activity);
+  if (!clazz) {
+    return;
+  }
+  jmethodID mid = env->GetMethodID(clazz, "onShadersReady", "()V");
+  if (!mid) {
+    env->ExceptionClear();
+    return;
+  }
+  env->CallVoidMethod(activity, mid);
+}
+
+/* Phase 2-4: batch shader compilation with progress reporting. */
+static void shader_warmup_phase(bContext *C, android_app *app)
+{
+  using namespace blender::eevee;
+
+  if (!C) {
+    return;
+  }
+
+  const auto t_warmup = std::chrono::steady_clock::now();
+  fprintf(stderr, "[BlenderAndroid] shader warmup: Phase 2 — triggering sync\n");
+  fflush(stderr);
+
+  /* Phase 2: Trigger one sync cycle to queue all material shaders. */
+  WM_main_loop_body(C);
+
+  /* Phase 2b: Create temporary EEVEE Instance to pre-compile engine shaders
+   * (shadow, film, deferred lighting, SSS, volume, etc. ~50 shaders).
+   * Uses shared ShaderModule cache — shaders persist for real Instance. */
+  Instance ee_instance;
+  ee_instance.init();
+
+  /* Safety check: verify compilation work was queued. */
+  if (!GPU_shader_compiler_has_pending_work()) {
+    fprintf(stderr,
+            "[BlenderAndroid] shader warmup: no pending work after sync, "
+            "skipping to viewport\n");
+    fflush(stderr);
+    shader_warmup_call_ready(app);
+    return;
+  }
+
+  /* Phase 3: Poll until all compilations complete, with progress reporting. */
+  const uint32_t total = GPU_shader_compiler_pending_count();
+  const int MAX_POLL_ITERATIONS = 300;
+  const double TIMEOUT_SECONDS = 10.0;
+  int iterations = 0;
+
+  fprintf(stderr,
+          "[BlenderAndroid] shader warmup: Phase 3 — %u shaders to compile\n",
+          total);
+  fflush(stderr);
+
+  while (GPU_shader_compiler_has_pending_work() && iterations < MAX_POLL_ITERATIONS) {
+    /* Check timeout. */
+    const double elapsed = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - t_warmup)
+                               .count();
+    if (elapsed > TIMEOUT_SECONDS) {
+      fprintf(stderr,
+              "[BlenderAndroid] shader warmup: timeout after %.1fs (%d/%u compiled)\n",
+              elapsed,
+              iterations,
+              total);
+      fflush(stderr);
+      break;
+    }
+
+    GPU_pass_cache_update();
+
+    /* Report progress with real shader counts. */
+    const uint32_t remaining = GPU_shader_compiler_pending_count();
+    const uint32_t compiled = (remaining < total) ? (total - remaining) : 0;
+    shader_warmup_call_progress(app, int(compiled), int(total));
+
+    /* Yield: process Android events for ~16ms so UI updates. */
+    int events;
+    android_poll_source *source;
+    const int timeout_ms = 16;
+    while (ALooper_pollOnce(timeout_ms, nullptr, &events, (void **)&source) >= 0) {
+      if (source) {
+        source->process(app, source);
+      }
+      if (app->destroyRequested) {
+        return;
+      }
+    }
+
+    iterations++;
+  }
+
+  const double total_ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - t_warmup)
+                              .count();
+  fprintf(stderr,
+          "[BlenderAndroid] shader warmup: done in %.0fms (%d iterations)\n",
+          total_ms,
+          iterations);
+  fflush(stderr);
+
+  /* Phase 4: Signal ready. */
+  shader_warmup_call_ready(app);
+}
+
+}  // namespace eevee
+}  // namespace blender
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_blender_blender_BlenderActivity_nativeSkipShaderWarmup(JNIEnv * /*env*/,
+                                                                jobject /*thiz*/)
+{
+  /* No-op: the skip flag is checked in the warmup loop. */
+}
+
+#endif  // WITH_GHOST_ANDROID
 int blender::GHOST_android_launch(int argc, const char **argv)
 #else
 int main(int argc,
@@ -629,6 +831,16 @@ int main(int argc,
 #ifdef WITH_GHOST_ANDROID
   fprintf(stderr, "[BlenderAndroid] creator: WM_init complete\n");
   fflush(stderr);
+#endif
+
+  /* Shader warmup: compile EEVEE engine shaders before showing viewport. */
+#ifdef WITH_GHOST_ANDROID
+  {
+    android_app *app = GHOST_SystemAndroid::getAndroidApp();
+    if (app) {
+      blender::eevee::shader_warmup_phase(C, app);
+    }
+  }
 #endif
 
 #ifndef WITH_PYTHON
