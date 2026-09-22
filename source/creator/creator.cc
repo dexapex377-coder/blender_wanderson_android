@@ -79,6 +79,8 @@
 #  include <jni.h>
 #  include <chrono>
 #  include <cstdio>
+#  include "GPU_pass.hh"
+#  include "GPU_shader.hh"
 #  include "GHOST_SystemAndroid.hh"
 #endif
 
@@ -437,8 +439,6 @@ static void shader_warmup_call_ready(android_app *app)
 /* Phase 2-4: batch shader compilation with progress reporting. */
 static void shader_warmup_phase(bContext *C, android_app *app)
 {
-  using namespace blender::eevee;
-
   if (!C) {
     return;
   }
@@ -451,7 +451,7 @@ static void shader_warmup_phase(bContext *C, android_app *app)
   WM_main_loop_body(C);
 
   /* Safety check: verify compilation work was queued. */
-  if (!GPU_shader_compiler_has_pending_work()) {
+  if (!blender::GPU_shader_compiler_has_pending_work()) {
     fprintf(stderr,
             "[BlenderAndroid] shader warmup: no pending work after sync, "
             "skipping to viewport\n");
@@ -461,7 +461,7 @@ static void shader_warmup_phase(bContext *C, android_app *app)
   }
 
   /* Phase 3: Poll until all compilations complete, with progress reporting. */
-  const uint32_t total = GPU_shader_compiler_pending_count();
+  const uint32_t total = blender::GPU_shader_compiler_pending_count();
   const int MAX_POLL_ITERATIONS = 300;
   const double TIMEOUT_SECONDS = 10.0;
   int iterations = 0;
@@ -471,7 +471,7 @@ static void shader_warmup_phase(bContext *C, android_app *app)
           total);
   fflush(stderr);
 
-  while (GPU_shader_compiler_has_pending_work() && iterations < MAX_POLL_ITERATIONS) {
+  while (blender::GPU_shader_compiler_has_pending_work() && iterations < MAX_POLL_ITERATIONS) {
     /* Check timeout. */
     const double elapsed = std::chrono::duration<double>(
                                std::chrono::steady_clock::now() - t_warmup)
@@ -486,10 +486,10 @@ static void shader_warmup_phase(bContext *C, android_app *app)
       break;
     }
 
-    GPU_pass_cache_update();
+    blender::GPU_pass_cache_update();
 
     /* Report progress with real shader counts. */
-    const uint32_t remaining = GPU_shader_compiler_pending_count();
+    const uint32_t remaining = blender::GPU_shader_compiler_pending_count();
     const uint32_t compiled = (remaining < total) ? (total - remaining) : 0;
     shader_warmup_call_progress(app, int(compiled), int(total));
 
