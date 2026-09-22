@@ -1974,7 +1974,7 @@ setup_platform_linker_flags(blender)
 setup_platform_linker_libs(blender)
 setup_platform_linker_symbol_hiding(blender)
 
-blender_target_include_dirs(blender ${INC})
+blender_target_include_dirs(blender ${INC} ${INC_SYS})
 
 # -----------------------------------------------------------------------------
 # USD registry.
