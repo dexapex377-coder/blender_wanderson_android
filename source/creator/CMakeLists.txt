@@ -6,6 +6,7 @@ set(INC
   ../blender/editors/include
   ../blender/io/usd
   ../blender/makesrna
+  ../blender/draw
 )
 
 set(LIB
