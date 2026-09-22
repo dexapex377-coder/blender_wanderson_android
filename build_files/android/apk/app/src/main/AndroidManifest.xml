@@ -29,7 +29,8 @@
         android:hasCode="true"
         android:allowBackup="true"
         android:extractNativeLibs="true"
-        android:largeHeap="true">
+        android:largeHeap="true"
+        android:threadStackSize="8388608">
 
         <!-- BlenderActivity extends NativeActivity; loads libblender.so and
              bridges soft-keyboard IME text to native.
@@ -52,8 +53,7 @@
             android:launchMode="singleTask"
             android:screenOrientation="user"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|density|navigation|uiMode"
-            android:exported="true"
-            android:threadStackSize="8388608">
+            android:exported="true">
             <meta-data android:name="android.app.lib_name" android:value="blender" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
