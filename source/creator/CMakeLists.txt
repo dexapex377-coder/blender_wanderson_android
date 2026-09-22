@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+# Force rebuild after shader warmup fix
+set(BLENDER_SHADER_WARMUP_FIX_VERSION 3)
+
 set(INC
   ../blender/editors/include
   ../blender/io/usd
