@@ -443,8 +443,7 @@ static void shader_warmup_call_ready(android_app *app)
 /* Run on main thread after first frame - safe for GPU operations. */
 void blender::shader_warmup_mainloop(bContext *C, android_app *app)
 {
-  using namespace blender::eevee;
-
+  namespace eevee = blender::eevee;
   if (!C) {
     return;
   }
@@ -462,7 +461,7 @@ void blender::shader_warmup_mainloop(bContext *C, android_app *app)
             "[BlenderAndroid] shader warmup: no pending work after sync, "
             "skipping to viewport\n");
     fflush(stderr);
-    shader_warmup_call_ready(app);
+    eevee::shader_warmup_call_ready(app);
     return;
   }
 
@@ -497,7 +496,7 @@ void blender::shader_warmup_mainloop(bContext *C, android_app *app)
     /* Report progress with real shader counts. */
     const uint32_t remaining = blender::GPU_shader_compiler_pending_count();
     const uint32_t compiled = (remaining < total) ? (total - remaining) : 0;
-    shader_warmup_call_progress(app, int(compiled), int(total));
+    eevee::shader_warmup_call_progress(app, int(compiled), int(total));
 
     /* Yield: process Android events for ~16ms so UI updates. */
     int events;
@@ -525,7 +524,7 @@ void blender::shader_warmup_mainloop(bContext *C, android_app *app)
   fflush(stderr);
 
   /* Phase 4: Signal ready. */
-  shader_warmup_call_ready(app);
+  eevee::shader_warmup_call_ready(app);
 }
 
 }  // namespace eevee
