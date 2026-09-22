@@ -249,12 +249,18 @@ extern "C" JNIEXPORT void JNICALL Java_org_blender_blender_BlenderActivity_nativ
   env->ReleaseStringUTFChars(path, utf);
 }
 
+namespace blender {
+extern void shader_warmup_mainloop(bContext *C, android_app *app);
+}  // namespace blender
+
 extern "C" void android_main(struct android_app *app)
 {
   ghost_android_redirect_stdio();
   GHOST_SystemAndroid::setAndroidApp(app);
   app->onAppCmd = on_app_cmd;
   app->onInputEvent = on_input_event;
+
+  static bool g_shader_warmup_done = false;
 
   while (!app->destroyRequested) {
     int events;
@@ -279,6 +285,12 @@ extern "C" void android_main(struct android_app *app)
 
     if (g_context) {
       blender::WM_main_loop_body(g_context);
+
+      /* Run shader warmup on the main thread after first frame. */
+      if (!g_shader_warmup_done) {
+        blender::shader_warmup_mainloop(g_context, app);
+        g_shader_warmup_done = true;
+      }
     }
   }
 }

@@ -84,6 +84,10 @@
 #  include "GHOST_SystemAndroid.hh"
 #endif
 
+namespace blender {
+void shader_warmup_mainloop(bContext *C, android_app *app);
+}  // namespace blender
+
 #include "ED_datafiles.h"
 
 #include "SEQ_modifier.hh"
@@ -436,9 +440,11 @@ static void shader_warmup_call_ready(android_app *app)
   env->CallVoidMethod(activity, mid);
 }
 
-/* Phase 2-4: batch shader compilation with progress reporting. */
-static void shader_warmup_phase(bContext *C, android_app *app)
+/* Run on main thread after first frame - safe for GPU operations. */
+void blender::shader_warmup_mainloop(bContext *C, android_app *app)
 {
+  using namespace blender::eevee;
+
   if (!C) {
     return;
   }
@@ -823,16 +829,6 @@ int main(int argc,
 #ifdef WITH_GHOST_ANDROID
   fprintf(stderr, "[BlenderAndroid] creator: WM_init complete\n");
   fflush(stderr);
-#endif
-
-  /* Shader warmup: compile EEVEE engine shaders before showing viewport. */
-#ifdef WITH_GHOST_ANDROID
-  {
-    android_app *app = GHOST_SystemAndroid::getAndroidApp();
-    if (app) {
-      blender::eevee::shader_warmup_phase(C, app);
-    }
-  }
 #endif
 
 #ifndef WITH_PYTHON
