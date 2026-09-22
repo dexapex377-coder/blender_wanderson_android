@@ -4,7 +4,7 @@
 
 set(INC
   PUBLIC .
-  intern
+  PUBLIC intern
 
   ../editors/include
   ../editors/space_view3d
