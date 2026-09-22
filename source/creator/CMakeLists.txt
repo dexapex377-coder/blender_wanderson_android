@@ -6,7 +6,6 @@ set(INC
   ../blender/editors/include
   ../blender/io/usd
   ../blender/makesrna
-  ../blender/draw
 )
 
 set(LIB
@@ -24,6 +23,7 @@ set(LIB
   PRIVATE bf::render
   PRIVATE bf::sequencer
   PRIVATE bf::windowmanager
+  PRIVATE bf::draw
   PRIVATE bf::dependencies::opencolorio
 )
 
