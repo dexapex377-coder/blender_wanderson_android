@@ -74,7 +74,7 @@
 #include "RE_texture.h"
 
 #ifdef WITH_GHOST_ANDROID
-#  include "engines/eevee/eevee_instance.hh"
+#  include "draw/engines/eevee/eevee_instance.hh"
 #endif
 
 #include "ED_datafiles.h"
