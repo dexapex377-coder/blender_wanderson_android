@@ -46,6 +46,12 @@ endif()
 
 if(WIN32)
   list(APPEND INC ../../intern/utfconv)
+if(WIN32)
+  list(APPEND INC ../../intern/utfconv)
+endif()
+
+if(WITH_GHOST_ANDROID)
+  list(APPEND INC_SYS ${ANDROID_NDK}/sources/android/native_app_glue)
 endif()
 
 if(WITH_LIBMV)
