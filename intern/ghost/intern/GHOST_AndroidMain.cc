@@ -112,6 +112,35 @@ static std::vector<std::string> ghost_android_read_launch_args(android_app *app)
   return args;
 }
 
+struct LaunchArgs {
+  android_app *app;
+  std::vector<std::string> file_args;
+  std::string open_file;
+};
+
+static void *ghost_android_launch_thread(void *arg)
+{
+  LaunchArgs *args = static_cast<LaunchArgs *>(arg);
+  android_app *app = args->app;
+
+  std::vector<const char *> argv;
+  argv.push_back("blender");
+  for (const std::string &arg : args->file_args) {
+    argv.push_back(arg.c_str());
+  }
+  argv.push_back("--disable-crash-handler");
+  if (!args->open_file.empty()) {
+    argv.push_back(args->open_file.c_str());
+  }
+  for (const char *arg : argv) {
+    __android_log_print(ANDROID_LOG_INFO, "blender", "[BlenderAndroid] argv: %s", arg);
+  }
+  blender::GHOST_android_launch(int(argv.size()), argv.data());
+  unsetenv("BLENDER_ANDROID_OPEN_FILE");
+  delete args;
+  return nullptr;
+}
+
 static void on_app_cmd(android_app *app, int32_t cmd)
 {
   switch (cmd) {
@@ -129,53 +158,22 @@ static void on_app_cmd(android_app *app, int32_t cmd)
 
     case APP_CMD_INIT_WINDOW:
       if (!g_blender_launched) {
-        /* Launch arguments come from blender_args.txt, whitespace separated, when that file
-         * exists. A driver quirk on one device is diagnosed by toggling flags such as
-         * --debug-gpu-force-workarounds or --log while watching logcat, and having to rebuild and
-         * reinstall a 170 MB APK for each attempt makes that loop useless.
-         *
-         * Nothing is passed by default beyond --disable-crash-handler. There used to be a
-         * --debug-gpu-force-workarounds here, added while bringing the port up to get past a
-         * driver that refused compute
-         * pipelines. That turned out to be the SPIR-V version the shaders were emitted as, which
-         * is fixed at the source now, and the flag was making the viewport pay for it: taking the
-         * forced path skips feature detection entirely and leaves dynamic rendering local read
-         * off -- the one extension Blender enables specifically for Qualcomm, because reading
-         * attachments from tile memory is what a deferred renderer needs on a tiler. Measured on
-         * an S24 Ultra with a 292k vertex scene, turning it back on is worth 5-18% of the frame
-         * while orbiting.
-         *
-         * The flag is still available through blender_args.txt when a driver needs it. */
         std::vector<std::string> file_args = ghost_android_read_launch_args(app);
-        std::vector<const char *> argv;
-        argv.push_back("blender");
-        for (const std::string &arg : file_args) {
-          argv.push_back(arg.c_str());
-        }
-        argv.push_back("--disable-crash-handler");
-        /* A .blend the system asked us to open, resolved to a path by BlenderActivity
-         * and left in the environment before the native thread started. Passed as an
-         * argument rather than opened afterwards, so it is the file that loads instead
-         * of the startup file loading and being replaced -- the same route a
-         * double-clicked file takes into argv[1] on macOS. Blender's own fall-through
-         * argument handler (main_args_handle_load_file) takes it from here.
-         *
-         * Copied out rather than used in place: argv holds borrowed pointers and the
-         * unsetenv below would invalidate what getenv returned. */
         std::string open_file;
         if (const char *env = getenv("BLENDER_ANDROID_OPEN_FILE")) {
           open_file = env;
         }
-        if (!open_file.empty()) {
-          argv.push_back(open_file.c_str());
+
+        LaunchArgs *args = new LaunchArgs{app, std::move(file_args), std::move(open_file)};
+        pthread_t thread;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 8 * 1024 * 1024);
+        if (pthread_create(&thread, &attr, ghost_android_launch_thread, args) != 0) {
+          delete args;
         }
-        for (const char *arg : argv) {
-          __android_log_print(ANDROID_LOG_INFO, "blender", "[BlenderAndroid] argv: %s", arg);
-        }
-        blender::GHOST_android_launch(int(argv.size()), argv.data());
-        /* One launch only. A later tap arrives through onNewIntent instead, and must
-         * not find a stale path here. */
-        unsetenv("BLENDER_ANDROID_OPEN_FILE");
+        pthread_attr_destroy(&attr);
+        pthread_detach(thread);
         g_blender_launched = true;
       }
       else if (GHOST_ISystem::getSystem()) {

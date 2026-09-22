@@ -29,8 +29,7 @@
         android:hasCode="true"
         android:allowBackup="true"
         android:extractNativeLibs="true"
-        android:largeHeap="true"
-        android:threadStackSize="8388608">
+        android:largeHeap="true">
 
         <!-- BlenderActivity extends NativeActivity; loads libblender.so and
              bridges soft-keyboard IME text to native.
