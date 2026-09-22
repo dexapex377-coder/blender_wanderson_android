@@ -74,8 +74,6 @@
 #include "RE_texture.h"
 
 #ifdef WITH_GHOST_ANDROID
-#  include "engines/eevee/eevee_instance.hh"
-#  include "engines/eevee/eevee_engine.h"
 #  include <android/log.h>
 #  include <android_native_app_glue.h>
 #  include <jni.h>
@@ -451,12 +449,6 @@ static void shader_warmup_phase(bContext *C, android_app *app)
 
   /* Phase 2: Trigger one sync cycle to queue all material shaders. */
   WM_main_loop_body(C);
-
-  /* Phase 2b: Create temporary EEVEE Instance to pre-compile engine shaders
-   * (shadow, film, deferred lighting, SSS, volume, etc. ~50 shaders).
-   * Uses shared ShaderModule cache — shaders persist for real Instance. */
-  Instance ee_instance;
-  ee_instance.init();
 
   /* Safety check: verify compilation work was queued. */
   if (!GPU_shader_compiler_has_pending_work()) {
