@@ -46,8 +46,6 @@ endif()
 
 if(WIN32)
   list(APPEND INC ../../intern/utfconv)
-if(WIN32)
-  list(APPEND INC ../../intern/utfconv)
 endif()
 
 if(WITH_GHOST_ANDROID)
