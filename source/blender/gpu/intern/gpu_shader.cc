@@ -345,6 +345,11 @@ bool GPU_shader_compiler_has_pending_work()
   return GPUBackend::get()->get_compiler()->is_compiling();
 }
 
+uint32_t GPU_shader_compiler_pending_count()
+{
+  return GPUBackend::get()->get_compiler()->pending_count();
+}
+
 void GPU_shader_compiler_wait_for_all()
 {
   GPUBackend::get()->get_compiler()->wait_for_all();
@@ -1208,6 +1213,12 @@ bool ShaderCompiler::is_compiling()
 {
   std::unique_lock lock(mutex_);
   return is_compiling_impl();
+}
+
+uint32_t ShaderCompiler::pending_count()
+{
+  std::unique_lock lock(mutex_);
+  return uint32_t(async_compilations_.size());
 }
 
 void ShaderCompiler::wait_for_all()

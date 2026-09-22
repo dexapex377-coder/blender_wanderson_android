@@ -118,6 +118,11 @@ void GPU_shader_async_compilation_cancel(AsyncCompilationHandle &handle);
  */
 bool GPU_shader_compiler_has_pending_work();
 /**
+ * Returns the number of shader compilations currently in the pipeline
+ * (queued but not yet finalized). Decreases as compilations complete.
+ */
+uint32_t GPU_shader_compiler_pending_count();
+/**
  *  Wait until all the requested shaders have been compiled.
  */
 void GPU_shader_compiler_wait_for_all();

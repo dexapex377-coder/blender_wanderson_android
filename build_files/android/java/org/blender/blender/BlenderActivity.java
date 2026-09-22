@@ -28,6 +28,12 @@ public class BlenderActivity extends NativeActivity {
 
   private native void nativeOnCommitText(String text);
   private native void nativeOnKey(int keycode, int action, int metaState);
+  private native void nativeSkipShaderWarmup();
+
+  /* ---- Shader warmup callbacks (called from native) ---- */
+  public void onShaderProgress(int current, int total) {}
+  public void onShadersReady() {}
+  public void onSkipWarmup() { nativeSkipShaderWarmup(); }
 
   @Override
   protected void onCreate(Bundle state) {

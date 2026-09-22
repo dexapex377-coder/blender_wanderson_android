@@ -237,6 +237,7 @@ class ShaderCompiler {
   bool async_specialization_is_ready(AsyncSpecializationHandle &handle);
 
   bool is_compiling();
+  uint32_t pending_count();
   void wait_for_all();
   void pause_all();
   void continue_all();

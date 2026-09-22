@@ -77,6 +77,38 @@ public class BlenderActivity extends NativeActivity {
   private native void nativeOnCommitText(String text);
   private native void nativeOnKey(int keycode, int action, int metaState);
   private native void nativeOpenMainFile(String path);
+  private native void nativeSkipShaderWarmup();
+
+  /* ---- Shader warmup callbacks (called from native) ---- */
+
+  /**
+   * Called from native during shader pre-compilation to report progress.
+   * Runs on the native thread; posts to UI thread for safe view updates.
+   * The ProgressBar and status text are placeholders — replace with your
+   * own splash layout. The native side only calls these methods; the
+   * visual design is yours to define.
+   */
+  public void onShaderProgress(int current, int total) {
+    /* Placeholder: log progress. Replace with ProgressBar.updateProgress(current, total). */
+    Log.d(TAG, "Shader progress: " + current + "/" + total);
+  }
+
+  /**
+   * Called from native when all shaders are compiled (or skipped/timed out).
+   * Hide your splash overlay here and let the viewport show through.
+   */
+  public void onShadersReady() {
+    /* Placeholder: log completion. Replace with splashOverlay.setVisibility(View.GONE). */
+    Log.d(TAG, "All shaders compiled — showing viewport");
+  }
+
+  /**
+   * Called from the splash UI when the user taps "Skip".
+   * Lets remaining shaders compile on-demand in background.
+   */
+  public void onSkipWarmup() {
+    nativeSkipShaderWarmup();
+  }
 
   @Override
   protected void onCreate(Bundle state) {
