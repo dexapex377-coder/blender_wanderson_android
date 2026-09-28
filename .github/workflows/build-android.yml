@@ -375,7 +375,7 @@ jobs:
           mkdir -p /tmp/native-artifacts
           cp blender_build_android/build_android_full/lib/libblender.so /tmp/native-artifacts/
           cp -r blender_build_android/build_android_full/bin /tmp/native-artifacts/
-          cp -r blender_build_android/build_android_full/share /tmp/native-artifacts/
+          
           cp -r blender_build_android/lib/android_arm64 /tmp/native-artifacts/
           cp -r blender/lib/linux_x64 /tmp/native-artifacts/
           cp -r blender_build_android/.stublibs /tmp/native-artifacts/
