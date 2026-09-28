@@ -4,14 +4,27 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Build a full Android APK for a given config, end to end:
-#   build_files/android/build_apk.sh [lite|full]
+#   build_files/android/build_apk.sh [lite|full] [--native-only|--package-only]
 #
 # Steps: host codegen tools (config-matched) -> cross-compile libblender.so ->
 # package APK. Deps must already be built (build_files/android/deps/build.sh).
+#
+# Modes:
+#   (default)           full pipeline: host tools -> libblender.so -> APK
+#   --native-only       build host tools + libblender.so, skip APK packaging
+#   --package-only      skip native build, only run package.sh (requires prebuilt .so)
 
 set -euo pipefail
 CONFIG="${1:-full}"
-case "$CONFIG" in lite|full) ;; *) echo "usage: $0 [lite|full]" >&2; exit 1;; esac
+case "$CONFIG" in lite|full) ;; *) echo "usage: $0 [lite|full] [--native-only|--package-only]" >&2; exit 1;; esac
+MODE="${2:-full}"
+case "$MODE" in --native-only|--package-only|full) ;; *) echo "usage: $0 [lite|full] [--native-only|--package-only]" >&2; exit 1;; esac
+
+set -euo pipefail
+CONFIG="${1:-full}"
+case "$CONFIG" in lite|full) ;; *) echo "usage: $0 [lite|full] [--native-only|--package-only]" >&2; exit 1;; esac
+MODE="${2:-full}"
+case "$MODE" in --native-only|--package-only|full) ;; *) echo "usage: $0 [lite|full] [--native-only|--package-only]" >&2; exit 1;; esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -52,6 +65,20 @@ if command -v ccache >/dev/null 2>&1; then
   echo "[build_apk] ccache enabled (host tools + target)"
 fi
 
+# ==== MODE HANDLING ====
+if [ "$MODE" = "--package-only" ]; then
+  echo "=== [$CONFIG] package APK only (using prebuilt .so) ==="
+  BLENDER_ANDROID_CONFIG="$CONFIG" BUILD="$BUILD" bash "$SCRIPT_DIR/apk/package.sh"
+  exit 0
+fi
+
+if [ "$MODE" = "--native-only" ]; then
+  echo "=== [$CONFIG] native build only (host tools + libblender.so, no APK) ==="
+else
+  echo "=== [$CONFIG] full pipeline ==="
+fi
+
+# ==== HOST CODEGEN TOOLS ====
 echo "=== [$CONFIG] host codegen tools ==="
 # Always re-run CMake for the native code generators. This remains incremental,
 # but it is essential when an Android feature profile changes: makesrna must be
@@ -75,6 +102,11 @@ cmake -S . -B "$BUILD" -G Ninja \
 # The glTF add-on dlopens the meshopt bridge at run time, so it is not a
 # dependency of the blender target and would never be built otherwise.
 ninja -C "$BUILD" blender bf_intern_meshopt_bridge bf_intern_draco_bridge
+
+if [ "$MODE" = "--native-only" ]; then
+  echo "=== [$CONFIG] native build complete (libblender.so ready) ==="
+  exit 0
+fi
 
 echo "=== [$CONFIG] package APK ==="
 BLENDER_ANDROID_CONFIG="$CONFIG" BUILD="$BUILD" bash "$SCRIPT_DIR/apk/package.sh"

@@ -3,34 +3,17 @@ name: Kronos3D Build
 on:
   workflow_dispatch:
 
-# End-to-end CI build of Kronos3D for Android (Blender 5.3a alpha 2).
-# Uses the repo's own build stack, byte-for-byte:
-#   build_files/android/build_apk.sh full
-# which: (1) builds host codegen tools (makesdna/makesrna/datatoc/msgfmt/shader_tool)
-# with the same android_features_full.cmake feature set, (2) cross-compiles libblender.so
-# via platform_android.cmake, and (3) packages the APK with build_files/android/apk/package.sh
-# (aapt2 + d8 + apksigner, NO gradle).
+# Two-job pipeline:
+# 1. build-native  → compiles all C++ (libblender.so + deps) → uploads artifacts
+# 2. build-apk     → downloads .so from last successful build-native → runs package.sh (~2-3 min)
 #
-# Configuration notes mirroring what the deps builder (deps/build.sh) produces:
-#   - libs are harvested in `${BUILD_BASE}/lib/android_arm64`, NOT in-repo.
-#   - `${LIBDIR}/.stublibs` (empty libpthread.a/librt.a) satisfies deps that emit -lpthread/-lrt
-#     (bionic folds both into libc). Created here, matching deps/build.sh::stub_libs().
-#   - `${LIBDIR}/vulkan/include` needs Vulkan-Headers 1.4.341 (deps/build.sh::build_vulkan_headers())
-#     because the NDK ships older headers and Blender 5.3 uses newer Vulkan structs.
-#   - NDK r30 (matching the official Blender Android port). The prebuilt libs from
-#     projects.blender.org were compiled with NDK 30, so NDK 28 caused libc++ symbol mismatches
-#     (std::__ndk1::__hash_memory missing). NDK 30 is downloaded directly with nttld/setup-ndk
-#     (r30-beta1) -- NOT sdkmanager, which prompts for the android-sdk-preview-license. It is
-#     symlinked into $HOME/android-sdk/ndk/<full-version> so env.sh resolves it. JDK 17 +
-#     build-tools 35.0.1 + platforms android-35.
-#   - LFS objects are served anonymously by the GitHub LFS store of this fork.
-#
-# env.sh is intentionally NOT exported here: build_apk.sh unsets ANDROID_HOME/NDK_ROOT and derives
-# them from $HOME/android-sdk. NDK 30 is linked into $ANDROID_HOME/ndk/<full-version> so
-# env.sh resolves ANDROID_NDK_ROOT correctly (ANDROID_NDK_VERSION is exported from setup-ndk).
+# Usage:
+# - Java/XML/APK changes only → run ONLY build-apk (uses cached .so) → ~2-3 min
+# - C++/CMake changes → run build-native + build-apk → ~14 min
 
 jobs:
-  build:
+  build-native:
+    name: Build Native (libblender.so + deps)
     runs-on: ubuntu-latest
 
     env:
@@ -38,11 +21,10 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPRESS: 1
       CCACHE_COMPRESSLEVEL: 6
-      # Compiler identity by content, not mtime: setup-ndk re-extracts the NDK on
-      # every run, so clang's mtime changes and ccache's default 'mtime' policy
-      # treats every compile command as a different compiler => 0% hits. Content
-      # hashing makes the stable NDK restore produce stable cache keys.
       CCACHE_COMPILERCHECK: content
+
+    outputs:
+      native-sha: ${{ steps.set-native-sha.outputs.sha }}
 
     steps:
       - name: Checkout this repository (main, no LFS)
@@ -73,9 +55,6 @@ jobs:
           echo "First asset $ASSET size: $SIZE_AS"
           [ "$SIZE_AS" -gt 1024 ] || { echo "ERROR: $ASSET is still an LFS stub"; exit 1; }
           echo "Assets OK."
-          echo "=== remaining git modifications (should be empty) ==="
-          git status --short | head -20
-          echo "Required LFS files verified OK."
 
       - name: Resolve precompiled libs commit IDs
         id: libs-commit
@@ -152,12 +131,6 @@ jobs:
           test -f "$LIBDIR/sse2neon/include/sse2neon.h" || { echo "ERROR: sse2neon layout not fixed"; exit 1; }
           echo "sse2neon OK: $(ls "$LIBDIR/sse2neon/include")"
 
-      # NDK r30-beta1 (30.0.14904198)  matching the official Blender Android port. We download
-      # it directly with nttld/setup-ndk (like the official port) instead of sdkmanager: the NDK
-      # beta needs the android-sdk-preview-license, and sdkmanager prompts to accept it
-      # interactively, which the runner cannot. REQUIRED: the prebuilt libs were compiled with
-      # clang 21 and reference std::__ndk1::__hash_memory, a libc++ internal NDK 28 does not
-      # provide. NDK 28 produces a link error or an APK that dies at startup.
       - name: Cache staged Android SDK (build-tools/platforms, no NDK)
         id: cache-sdk
         uses: actions/cache/restore@v4
@@ -226,9 +199,6 @@ jobs:
           CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
           [ -x "$CLANG" ] || { echo "ERROR: NDK 30 clang missing"; exit 1; }
           "$CLANG" --version | head -2
-          # env.sh (sourced by build_apk.sh) resolves ANDROID_NDK_ROOT as
-          # $ANDROID_HOME/ndk/$ANDROID_NDK_VERSION with ANDROID_HOME=$HOME/android-sdk.
-          # Link the downloaded NDK there so env.sh finds it by the full version name.
           mkdir -p "$HOME/android-sdk/ndk"
           ln -sfn "$NDK" "$HOME/android-sdk/ndk/$FULL"
           ls -la "$HOME/android-sdk/ndk/"
@@ -245,25 +215,18 @@ jobs:
           patchelf --version
           ccache --version | head -1
 
-      # Compiler cache enabled in build_apk.sh (CMAKE_C/CXX_COMPILER_LAUNCHER=ccache).
-      # Mirrors the blender-clone (3.6) recipe exactly, the one that took the build
-      # from ~40 min to ~6 min: key by SHA + restore-keys fallback to the last
-      # cached build, and save with always() so the chain never breaks.
       - name: Restore ccache
         uses: actions/cache/restore@v4
         id: ccache-restore
         with:
-          path: ${{ env.CCACHE_DIR }}
+          path: ${{ github.workspace }}/.ccache
           key: ccache-android-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             ccache-android-${{ runner.os }}-
 
       - name: Configure ccache
         run: |
-          mkdir -p "$CCACHE_DIR"
-          # The repo's own build_apk.sh enables the launcher when ccache is on PATH.
-          # 30 GB so a full libblender rebuild stays hot even after several source
-          # changes; compression makes the archive fit actions/cache's 10 GB budget.
+          mkdir -p "${{ github.workspace }}/.ccache"
           ccache -M 30G
           ccache --show-config 2>/dev/null | grep -iE "max_size|compression|compiler_check" | head -6
           ccache --show-stats | head -8
@@ -280,11 +243,6 @@ jobs:
         with:
           python-version: '3.13'
 
-      # Vulkan-Headers 1.4.341 into ${LIBDIR}/vulkan/include, exactly as deps/build.sh's
-      # build_vulkan_headers() installs them (the prebuilt libs only ship spirv/).
-      # IMPORTANT: gate on the header VERSION, not on file existence — the libs cache
-      # restores older headers, and vk_device.cc diag uses VK 1.1 `subgroupSize` /
-      # VK_FORMAT_R11G11B10_UFLOAT, which old headers do not define.
       - name: Provide Vulkan-Headers 1.4.341
         run: |
           set -o pipefail
@@ -326,15 +284,6 @@ jobs:
             --print-file-type "$LIBDIR/ffmpeg/lib/libavutil.a" 2>/dev/null | grep -c "ABS" || true
           echo "FFmpeg + codec deps built with PIC."
 
-      # OIDN must be linked STATICALLY into libblender.so: the shared layout's
-      # CPU device is a dlopen()ed module (libOpenImageDenoise_device_cpu.so.2.5.0)
-      # that the APK only ships as lib*.so, and with no DT_NEEDED edge from the
-      # other OIDN libs package.sh's NEEDED-closure walk never stages it -- runtime
-      # then reports "Failed to create OIDN CPU device". Linking against the .a's
-      # (deps/build.sh::build_oidn, -DOIDN_STATIC_LIB=ON) removes the module loader
-      # entirely, matching the Wanweison APK where libblender.so embeds OIDN (no
-      # OpenImageDenoise DT_NEEDED at all). The prebuilt lib-android_arm64 tree
-      # ships the SHARED layout, so drop it first or the .so's win the link.
       - name: Build OIDN static (denoiser linked into libblender.so)
         run: |
           set -o pipefail
@@ -351,8 +300,6 @@ jobs:
           fi
           echo "OIDN static OK."
 
-      # Empty stub archives for -lpthread/-lrt (bionic folds both into libc).
-      # Mirrors deps/build.sh::stub_libs() byte-for-byte.
       - name: Create .stublibs
         run: |
           set -o pipefail
@@ -371,13 +318,6 @@ jobs:
           ls -la "$STUB"
           [ -d "$LIBDIR/draco" ] || { echo "ERROR: draco missing from libs"; exit 1; }
 
-      # The Build APK step is the one that dominates wall-time (~7439 ninja targets).
-      # Restore the ninja build dirs so ninja can skip already-built objects: any
-      # target whose outputs round-trip through the cache unmodified is not re-run.
-      # This is the ccache complement: build-dir hits skip the per-command spawn +
-      # ccache lookup overhead for unchanged files, ccache absorbs the rest.
-      # both dirs are keyed by ${{ github.sha }} with restore-keys fallback to the
-      # previous successful build.
       - name: Restore ninja build dir (target)
         uses: actions/cache/restore@v4
         id: cache-builddir-target
@@ -398,7 +338,7 @@ jobs:
           restore-keys: |
             builddir-host-${{ runner.os }}-
 
-      - name: Build APK (build_apk.sh full)
+      - name: Build native (libblender.so + all targets)
         run: |
           set -o pipefail
           cd blender
@@ -406,7 +346,8 @@ jobs:
           export ANDROID_NDK_VERSION="${{ steps.setup-ndk.outputs.ndk-full-version }}"
           export ANDROID_HOME="$HOME/android-sdk"
           export ANDROID_API=31
-          bash build_files/android/build_apk.sh full 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
+          # Only build the native library, skip APK packaging
+          bash build_files/android/build_apk.sh full --native-only 2>&1 | tee "$GITHUB_WORKSPACE/build_native.log"
 
       - name: Save ninja build dir (target)
         if: always()
@@ -421,12 +362,159 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
-          path: ${{ env.CCACHE_DIR }}
+          path: ${{ github.workspace }}/.ccache
           key: ccache-android-${{ runner.os }}-${{ github.sha }}
 
       - name: Show ccache stats
         if: always()
         run: ccache --show-stats 2>/dev/null | head -12
+
+      - name: Upload native artifacts (.so + build dirs + libs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: kronos3d-native
+          path: |
+            blender_build_android/build_android_full/lib/libblender.so
+            blender_build_android/build_android_full/bin
+            blender_build_android/build_android_full/share
+            blender_build_android/lib/android_arm64
+            blender/lib/linux_x64
+            blender_build_android/.stublibs
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Set native SHA for downstream
+        id: set-native-sha
+        run: echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-native-logs
+          path: |
+            build_native.log
+            blender_build_android/build_host_tools_full/CMakeCache.txt
+            blender_build_android/build_android_full/CMakeCache.txt
+            blender_build_android/**/*.log
+          if-no-files-found: ignore
+
+  build-apk:
+    name: Build APK (package only, uses cached .so)
+    runs-on: ubuntu-latest
+    needs: build-native
+    if: always() && needs.build-native.result == 'success'
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: 1
+      CCACHE_COMPRESSLEVEL: 6
+      CCACHE_COMPILERCHECK: content
+
+    steps:
+      - name: Checkout this repository (main, no LFS)
+        uses: actions/checkout@v4
+        with:
+          path: blender
+          ref: main
+          lfs: false
+
+      - name: Download native artifacts from build-native
+        uses: actions/download-artifact@v4
+        with:
+          name: kronos3d-native
+          path: .
+
+      - name: Restore layout for package.sh
+        run: |
+          set -o pipefail
+          mkdir -p blender_build_android/build_android_full
+          mkdir -p blender_build_android/lib
+          mkdir -p blender
+          mv libblender.so blender_build_android/build_android_full/lib/
+          mv bin blender_build_android/build_android_full/
+          mv share blender_build_android/build_android_full/
+          mv android_arm64 blender_build_android/lib/
+          mv linux_x64 blender/lib/
+          mv .stublibs blender_build_android/
+          echo "Native artifacts restored."
+
+      - name: Resolve required Git LFS files from the GitHub store
+        run: |
+          set -o pipefail
+          cd blender
+          git lfs install --local
+          INCLUDE="release/datafiles/**,scripts/**,assets/**,locale/**"
+          git lfs pull --include="$INCLUDE"
+          echo "LFS files resolved."
+
+      - name: Verify resolved LFS files
+        run: |
+          set -o pipefail
+          cd blender
+          SIZE_SB=$(stat -c%s release/datafiles/startup.blend)
+          echo "startup.blend size: $SIZE_SB (real content, not a stub)"
+          [ "$SIZE_SB" -gt 1024 ] || { echo "ERROR: startup.blend is an LFS stub"; exit 1; }
+          ASSET=$(git ls-files 'assets/**/*.blend' | head -1)
+          SIZE_AS=$(stat -c%s "$ASSET")
+          echo "First asset $ASSET size: $SIZE_AS"
+          [ "$SIZE_AS" -gt 1024 ] || { echo "ERROR: $ASSET is still an LFS stub"; exit 1; }
+          echo "Assets OK."
+
+      - name: Cache staged Android SDK
+        id: cache-sdk
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/android-sdk
+          key: android-sdk-30.0.14904198
+
+      - name: Stage Android SDK
+        id: sdk
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          SDK="$HOME/android-sdk"
+          mkdir -p "$SDK/licenses"
+          cp "$ANDROID_HOME/licenses/"* "$SDK/licenses/" 2>/dev/null || true
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            "$SDKM" --sdk_root="$SDK" \
+              "build-tools;35.0.1" \
+              "platforms;android-35" \
+              "platform-tools"
+          else
+            echo "ERROR: sdkmanager not found at $SDKM" >&2
+            exit 1
+          fi
+
+      - uses: actions/cache/save@v4
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        with:
+          path: ~/android-sdk
+          key: android-sdk-30.0.14904198
+
+      - name: Setup JDK 17
+        id: setup-java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Build APK (package.sh only, uses prebuilt .so)
+        run: |
+          set -o pipefail
+          cd blender
+          export JAVA_HOME="${{ steps.setup-java.outputs.path }}"
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_API=31
+          # Only package the APK using prebuilt .so
+          bash build_files/android/build_apk.sh full --package-only 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -440,10 +528,8 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs
+          name: build-apk-logs
           path: |
             build_apk.log
-            blender_build_android/build_host_tools_full/CMakeCache.txt
-            blender_build_android/build_android_full/CMakeCache.txt
             blender_build_android/**/*.log
           if-no-files-found: ignore
