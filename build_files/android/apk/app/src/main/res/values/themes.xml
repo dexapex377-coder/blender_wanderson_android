@@ -3,16 +3,6 @@
      SPDX-License-Identifier: GPL-2.0-or-later -->
 <resources>
 
-    <!-- Kronos3D interface dark with blue accents -->
-    <color name="k3d_background">#121212</color>
-    <color name="k3d_surface">#1E1E1E</color>
-    <color name="k3d_blue">#4A90D9</color>
-    <color name="k3d_blue_dark">#357ABD</color>
-    <color name="k3d_blue_pressed">#2E6DA4</color>
-    <color name="k3d_text_primary">#FFFFFF</color>
-    <color name="k3d_text_secondary">#B0B0B0</color>
-    <color name="k3d_button_disabled">#555555</color>
-
     <!--
       Without a theme the app inherits the platform default, whose window is
       white: the launch splash then shows the icon's dark square floating on a
