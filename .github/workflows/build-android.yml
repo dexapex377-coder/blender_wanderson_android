@@ -3,14 +3,6 @@ name: Kronos3D Build
 on:
   workflow_dispatch:
 
-# Two-job pipeline:
-# 1. build-native  → compiles all C++ (libblender.so + deps) → uploads artifacts
-# 2. build-apk     → downloads .so from last successful build-native → runs package.sh (~2-3 min)
-#
-# Usage:
-# - Java/XML/APK changes only → run ONLY build-apk (uses cached .so) → ~2-3 min
-# - C++/CMake changes → run build-native + build-apk → ~14 min
-
 jobs:
   build-native:
     name: Build Native (libblender.so + deps)
@@ -369,20 +361,26 @@ jobs:
         if: always()
         run: ccache --show-stats 2>/dev/null | head -12
 
-      - name: Prepare native artifacts for upload (flat structure)
+      - name: Prepare native artifacts for upload (layout matches package.sh expectations)
         run: |
           set -o pipefail
           mkdir -p /tmp/native-artifacts
-          cp blender_build_android/build_android_full/lib/libblender.so /tmp/native-artifacts/
-          cp -r blender_build_android/build_android_full/bin /tmp/native-artifacts/
-          
-          cp -r blender_build_android/lib/android_arm64 /tmp/native-artifacts/
-          cp -r blender/lib/linux_x64 /tmp/native-artifacts/
-          cp -r blender_build_android/.stublibs /tmp/native-artifacts/
-          echo "Native artifacts staged at /tmp/native-artifacts:"
-          ls -la /tmp/native-artifacts/
+          # Target build: libblender.so + bridge .so files (exact layout package.sh expects)
+          mkdir -p /tmp/native-artifacts/build_android_full/lib
+          cp blender_build_android/build_android_full/lib/libblender.so /tmp/native-artifacts/build_android_full/lib/
+          cp blender_build_android/build_android_full/lib/libbf_intern_*_bridge.so /tmp/native-artifacts/build_android_full/lib/ 2>/dev/null || true
+          # Host tools (msgfmt, etc.)
+          cp -r blender_build_android/build_host_tools_full /tmp/native-artifacts/host_tools
+          # Prebuilt ARM64 libs (LIBDIR for package.sh)
+          cp -r blender_build_android/lib/android_arm64 /tmp/native-artifacts/prebuilt_arm64
+          # Prebuilt x64 libs (for host)
+          cp -r blender/lib/linux_x64 /tmp/native-artifacts/prebuilt_x64
+          # Stublibs
+          cp -r blender_build_android/.stublibs /tmp/native-artifacts/.stublibs
+          echo "Native artifacts staged:"
+          find /tmp/native-artifacts -type f | head -30
 
-      - name: Upload native artifacts (.so + build dirs + libs)
+      - name: Upload native artifacts
         uses: actions/upload-artifact@v4
         with:
           name: kronos3d-native
@@ -431,21 +429,25 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: kronos3d-native
-          path: .
+          path: /tmp/native-artifacts
 
-      - name: Restore layout for package.sh
+      - name: Restore layout for package.sh (exact layout it expects)
         run: |
           set -o pipefail
-          mkdir -p blender_build_android/build_android_full
-          mkdir -p blender_build_android/lib
-          mkdir -p blender
-          mv libblender.so blender_build_android/build_android_full/lib/
-          mv bin blender_build_android/build_android_full/
-          mv share blender_build_android/build_android_full/
-          mv android_arm64 blender_build_android/lib/
-          mv linux_x64 blender/lib/
-          mv .stublibs blender_build_android/
-          echo "Native artifacts restored."
+          # Restore target build libs (libblender.so + bridge .so)
+          mkdir -p blender_build_android/build_android_full/lib
+          cp /tmp/native-artifacts/build_android_full/lib/* blender_build_android/build_android_full/lib/
+          # Restore host tools
+          cp -r /tmp/native-artifacts/host_tools blender_build_android/build_host_tools_full
+          # Restore prebuilt ARM64 libs (LIBDIR for package.sh)
+          cp -r /tmp/native-artifacts/prebuilt_arm64/* blender_build_android/lib/android_arm64/
+          # Restore prebuilt x64 libs
+          cp -r /tmp/native-artifacts/prebuilt_x64 blender/lib/linux_x64
+          # Restore stublibs
+          cp -r /tmp/native-artifacts/.stublibs blender_build_android/
+          echo "Native artifacts restored:"
+          ls -la blender_build_android/build_android_full/lib/
+          ls -la blender_build_android/lib/android_arm64/python/
 
       - name: Resolve required Git LFS files from the GitHub store
         run: |
