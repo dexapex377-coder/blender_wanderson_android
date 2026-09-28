@@ -1,9 +1,9 @@
-name: Wanderson Android Build
+name: Kronos3D Build
 
 on:
   workflow_dispatch:
 
-# End-to-end CI build of Wanderson's blender_for_android port (Blender 5.3a alpha 2).
+# End-to-end CI build of Kronos3D for Android (Blender 5.3a alpha 2).
 # Uses the repo's own build stack, byte-for-byte:
 #   build_files/android/build_apk.sh full
 # which: (1) builds host codegen tools (makesdna/makesrna/datatoc/msgfmt/shader_tool)
@@ -26,7 +26,7 @@ on:
 #   - LFS objects are served anonymously by the GitHub LFS store of this fork.
 #
 # env.sh is intentionally NOT exported here: build_apk.sh unsets ANDROID_HOME/NDK_ROOT and derives
-# them from $HOME/android-sdk. NDK 30 is linked into $ANDROID_HOME/ndk/30.0.14904198-beta1 so
+# them from $HOME/android-sdk. NDK 30 is linked into $ANDROID_HOME/ndk/<full-version> so
 # env.sh resolves ANDROID_NDK_ROOT correctly (ANDROID_NDK_VERSION is exported from setup-ndk).
 
 jobs:
@@ -431,7 +431,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: blender-android-apk
+          name: kronos3d-android-apk
           path: blender_build_android/android_apk_stage_full/blender-full.apk
           retention-days: 14
           if-no-files-found: error
