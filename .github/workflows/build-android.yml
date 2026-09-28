@@ -369,17 +369,24 @@ jobs:
         if: always()
         run: ccache --show-stats 2>/dev/null | head -12
 
+      - name: Prepare native artifacts for upload (flat structure)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/native-artifacts
+          cp blender_build_android/build_android_full/lib/libblender.so /tmp/native-artifacts/
+          cp -r blender_build_android/build_android_full/bin /tmp/native-artifacts/
+          cp -r blender_build_android/build_android_full/share /tmp/native-artifacts/
+          cp -r blender_build_android/lib/android_arm64 /tmp/native-artifacts/
+          cp -r blender/lib/linux_x64 /tmp/native-artifacts/
+          cp -r blender_build_android/.stublibs /tmp/native-artifacts/
+          echo "Native artifacts staged at /tmp/native-artifacts:"
+          ls -la /tmp/native-artifacts/
+
       - name: Upload native artifacts (.so + build dirs + libs)
         uses: actions/upload-artifact@v4
         with:
           name: kronos3d-native
-          path: |
-            blender_build_android/build_android_full/lib/libblender.so
-            blender_build_android/build_android_full/bin
-            blender_build_android/build_android_full/share
-            blender_build_android/lib/android_arm64
-            blender/lib/linux_x64
-            blender_build_android/.stublibs
+          path: /tmp/native-artifacts/
           retention-days: 14
           if-no-files-found: error
 
