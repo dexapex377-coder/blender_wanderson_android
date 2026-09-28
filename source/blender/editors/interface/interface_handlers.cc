@@ -11904,6 +11904,7 @@ static int handle_menu_event(bContext *C,
                              const bool is_parent_menu,
                              const bool is_floating)
 {
+  int retval = WM_UI_HANDLER_CONTINUE;
   Button *but;
   ARegion *region = menu->region;
 
