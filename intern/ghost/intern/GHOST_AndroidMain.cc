@@ -73,7 +73,7 @@ static bool g_blender_launched = false;
  * This thread therefore starts with a null active context, and the first draw that
  * needs it dereferences null inside `VKContext::get()`. Publish it so the loop can
  * adopt it on its own thread before drawing. */
-static GPUContext *g_gpu_context = nullptr;
+static blender::GPUContext *g_gpu_context = nullptr;
 
 namespace blender {
 /* Called by the creator once init finished, to hand the context to the loop.
@@ -82,7 +82,7 @@ namespace blender {
  * thread while the creator writes them on `ghost_android_launch_thread`, so they
  * need release/acquire semantics: without it the loop can observe a half-published
  * pair (context visible, GPU context not) and draw against a null backend. */
-void GHOST_androidfinalize(bContext *C, GPUContext *gpu_ctx)
+void GHOST_androidfinalize(bContext *C, blender::GPUContext *gpu_ctx)
 {
   std::atomic_thread_fence(std::memory_order_release);
   g_gpu_context = gpu_ctx;
@@ -339,7 +339,7 @@ extern "C" void android_main(struct android_app *app)
      * owns the context it draws with. */
     if (g_context && g_gpu_context && !gpu_context_adopted) {
       std::atomic_thread_fence(std::memory_order_acquire);
-      GPU_context_active_set(g_gpu_context);
+      blender::GPU_context_active_set(g_gpu_context);
       gpu_context_adopted = true;
     }
 
