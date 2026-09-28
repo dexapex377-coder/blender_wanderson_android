@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-FileCopyrightText: 2026 Blender Authors
+     SPDX-License-Identifier: GPL-2.0-or-later -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/bl_surface" />
+    <corners android:radius="16dp" />
+</shape>

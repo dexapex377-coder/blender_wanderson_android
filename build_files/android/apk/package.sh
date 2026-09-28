@@ -256,17 +256,9 @@ echo "[apk] runtime payload: $(du -sh "$ASSETS/blender_runtime.zip" | cut -f1)"
 sha256sum "$ASSETS/blender_runtime.zip" | cut -c1-16 > "$ASSETS/blender_runtime.rev"
 echo "[apk] runtime revision: $(cat "$ASSETS/blender_runtime.rev")"
 
-echo "[apk] compiling BlenderActivity"
-mkdir -p "$STAGE/javac" "$STAGE/dex"
-"$JAVA_HOME/bin/javac" -classpath "$ANDROID_JAR" -source 17 -target 17 \
-  -d "$STAGE/javac" \
-  "$SCRIPT_DIR/app/src/main/java/org/blender/blender/BlenderActivity.java"
-"$BT/d8" --min-api "$ANDROID_API" --output "$STAGE/dex" \
-  $(find "$STAGE/javac" -name '*.class')
-
-echo "[apk] compiling resources (launcher icon)"
+echo "[apk] compiling resources"
 RES_SRC="$SCRIPT_DIR/app/src/main/res"
-mkdir -p "$STAGE/rescompiled"
+mkdir -p "$STAGE/rescompiled" "$STAGE/rjava"
 "$BT/aapt2" compile --dir "$RES_SRC" -o "$STAGE/rescompiled/res.zip"
 
 echo "[apk] linking resources"
@@ -282,9 +274,15 @@ if [ -n "${BLENDER_ANDROID_APPLICATION_ID:-}" ]; then
   AAPT_PACKAGE_ARGS=(--rename-manifest-package "$BLENDER_ANDROID_APPLICATION_ID")
   echo "[apk] application id: $BLENDER_ANDROID_APPLICATION_ID"
 fi
+# --java emits the R class, and it has to run before javac: the layouts are
+# addressed by R.layout/R.id, so R is a compile-time dependency of the sources.
+# This is why linking used to sit after the dex step -- it did not have to care
+# about the code, and the old single activity never named a resource. Now that
+# the code does, link first and the dex goes into the APK it produced.
 "$BT/aapt2" link -o "$STAGE/base.apk" -I "$ANDROID_JAR" $AAPT_DEBUG \
   "${AAPT_PACKAGE_ARGS[@]}" \
   --manifest "$SCRIPT_DIR/app/src/main/AndroidManifest.xml" \
+  --java "$STAGE/rjava" \
   `# These are the app's own resources, not an overlay. Passing them with -R` \
   `# made aapt2 demand that each one override something that already exists,` \
   `# which file resources like the icon get away with but a new colour or` \
@@ -292,6 +290,17 @@ fi
   "$STAGE/rescompiled/res.zip" \
   -A "$ASSETS" -0 zip \
   --min-sdk-version "$ANDROID_API" --target-sdk-version "$ANDROID_TARGET_API"
+
+echo "[apk] compiling activities"
+mkdir -p "$STAGE/javac" "$STAGE/dex"
+# The whole source tree plus the generated R, not a named file: there is more
+# than one activity now (LauncherActivity plus BlenderActivity) and an explicit
+# list is one more thing to forget when the next one is added.
+"$JAVA_HOME/bin/javac" -classpath "$ANDROID_JAR" -source 17 -target 17 \
+  -d "$STAGE/javac" \
+  $(find "$SCRIPT_DIR/app/src/main/java" "$STAGE/rjava" -name '*.java')
+"$BT/d8" --min-api "$ANDROID_API" --output "$STAGE/dex" \
+  $(find "$STAGE/javac" -name '*.class')
 
 echo "[apk] assembling"
 cp "$STAGE/base.apk" "$OUT"

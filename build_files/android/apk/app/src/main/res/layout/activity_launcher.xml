@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-FileCopyrightText: 2026 Blender Authors
+     SPDX-License-Identifier: GPL-2.0-or-later -->
+<!-- The launcher screen from the 3.6 port, rebuilt with plain views: this
+     package.sh has no Kotlin or Compose toolchain, only javac and aapt2.
+     Deliberately no splash artwork yet; a PNG is to be dropped in later. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bl_background"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Blender"
+        android:textColor="@color/bl_orange"
+        android:textSize="52sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="on Android"
+        android:textColor="@color/bl_text_secondary"
+        android:textSize="22sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="40dp"
+        android:background="@drawable/version_card"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:id="@+id/launcher_version"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/bl_text_primary"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="3D Creation Suite"
+            android:textColor="@color/bl_text_secondary"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/launcher_button"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_marginTop="40dp"
+        android:background="@drawable/launch_button"
+        android:text="Launch Blender"
+        android:textAllCaps="false"
+        android:textColor="@color/bl_text_primary"
+        android:textSize="20sp"
+        android:textStyle="bold" />
+
+</LinearLayout>

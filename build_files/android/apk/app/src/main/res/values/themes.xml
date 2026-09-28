@@ -25,4 +25,14 @@
         <item name="android:windowSplashScreenIconBackgroundColor">@color/blender_background</item>
     </style>
 
+    <!-- The launcher gets the app icon as its system splash, so it does not
+         read as a second Blender splash on the way into the launcher screen.
+         Its own window background is the launcher's dark, not Blender's
+         interface grey. -->
+    <style name="Theme.Blender.Launcher" parent="Theme.Blender">
+        <item name="android:windowBackground">@color/bl_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/bl_background</item>
+    </style>
+
 </resources>

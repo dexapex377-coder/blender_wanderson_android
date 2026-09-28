@@ -31,6 +31,25 @@
         android:extractNativeLibs="true"
         android:largeHeap="true">
 
+        <!-- The launcher screen, the way the 3.6 port had one. It carries MAIN
+             and LAUNCHER instead of BlenderActivity: this is what the app icon
+             opens, and it starts no native code, so Blender only comes up after
+             the tap.
+
+             A .blend tapped in a file manager does NOT come through here:
+             the VIEW/EDIT filters below are on BlenderActivity, which the
+             system calls directly. -->
+        <activity
+            android:name="org.blender.blender.LauncherActivity"
+            android:label="Blender"
+            android:theme="@style/Theme.Blender.Launcher"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <!-- BlenderActivity extends NativeActivity; loads libblender.so and
              bridges soft-keyboard IME text to native.
 
@@ -54,10 +73,6 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|density|navigation|uiMode"
             android:exported="true">
             <meta-data android:name="android.app.lib_name" android:value="blender" />
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
 
             <!-- "Open with Blender" for a .blend tapped in a file manager.
 
