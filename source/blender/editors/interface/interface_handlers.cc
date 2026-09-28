@@ -11906,9 +11906,16 @@ static int handle_menu_event(bContext *C,
 {
   Button *but;
   ARegion *region = menu->region;
-  Block *block = static_cast<Block *>(region->runtime->uiblocks.first);
 
-  int retval = WM_UI_HANDLER_CONTINUE;
+#ifdef __ANDROID__
+  if (menu == nullptr || region == nullptr || region->runtime == nullptr ||
+      region->runtime->uiblocks.is_empty())
+  {
+    return WM_UI_HANDLER_CONTINUE;
+  }
+#endif
+
+  Block *block = static_cast<Block *>(region->runtime->uiblocks.first);
 
   int mx = event->xy[0];
   int my = event->xy[1];
@@ -13004,6 +13011,16 @@ static int handle_menus_recursive(bContext *C,
   int retval = WM_UI_HANDLER_CONTINUE;
   bool do_towards_reinit = false;
 
+#ifdef __ANDROID__
+  /* Android: guard against null menu/region/runtime/uiblocks which can occur
+   * when the first tap lands before the popup region is fully built. */
+  if (menu == nullptr || menu->region == nullptr || menu->region->runtime == nullptr ||
+      menu->region->runtime->uiblocks.is_empty())
+  {
+    return WM_UI_HANDLER_CONTINUE;
+  }
+#endif
+
   /* check if we have a submenu, and handle events for it first */
   Button *but = region_find_active_but(menu->region);
   HandleButtonData *data = (but) ? but->active : nullptr;
@@ -13461,7 +13478,7 @@ static int popup_handler(bContext *C, const wmEvent *event, void *userdata)
     Block *block = static_cast<Block *>(menu->region->runtime->uiblocks.first);
 
     /* set last pie event to allow chained pie spawning */
-    if (block->flag & BLOCK_PIE_MENU) {
+    if (block && (block->flag & BLOCK_PIE_MENU)) {
       win->pie_event_type_last = block->pie_data->event_type;
       reset_pie = true;
     }

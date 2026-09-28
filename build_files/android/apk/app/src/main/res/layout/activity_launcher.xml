@@ -1,68 +1,103 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- SPDX-FileCopyrightText: 2026 Blender Authors
+<!-- SPDX-FileCopyrightText: 2026 Kronos3D Contributors
      SPDX-License-Identifier: GPL-2.0-or-later -->
-<!-- The launcher screen from the 3.6 port, rebuilt with plain views: this
-     package.sh has no Kotlin or Compose toolchain, only javac and aapt2.
-     Deliberately no splash artwork yet; a PNG is to be dropped in later. -->
+<!-- Kronos3D launcher screen: professional dark theme with blue accents -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bl_background"
+    android:background="@color/k3d_background"
     android:gravity="center"
     android:orientation="vertical"
-    android:padding="24dp">
+    android:padding="32dp">
+
+    <!-- App icon placeholder -->
+    <ImageView
+        android:layout_width="120dp"
+        android:layout_height="120dp"
+        android:src="@drawable/ic_launcher"
+        android:contentDescription="@string/app_name"
+        android:layout_marginBottom="24dp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Blender"
-        android:textColor="@color/bl_orange"
-        android:textSize="52sp"
-        android:textStyle="bold" />
+        android:text="Kronos3D"
+        android:textColor="@color/k3d_blue"
+        android:textSize="56sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.04" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="on Android"
-        android:textColor="@color/bl_text_secondary"
-        android:textSize="22sp" />
+        android:text="3D Creation Suite"
+        android:textColor="@color/k3d_text_secondary"
+        android:textSize="20sp" />
+
+    <View
+        android:layout_width="80dp"
+        android:layout_height="2dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="16dp"
+        android:background="@color/k3d_blue" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Unofficial Blender port for Android"
+        android:textColor="@color/k3d_text_secondary"
+        android:textSize="13sp" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="40dp"
+        android:layout_marginTop="32dp"
         android:background="@drawable/version_card"
         android:orientation="vertical"
-        android:padding="20dp">
+        android:padding="24dp">
 
         <TextView
             android:id="@+id/launcher_version"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="@color/bl_text_primary"
-            android:textSize="20sp"
-            android:textStyle="bold" />
+            android:textColor="@color/k3d_text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:gravity="center" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="3D Creation Suite"
-            android:textColor="@color/bl_text_secondary"
-            android:textSize="15sp" />
+            android:layout_marginTop="2dp"
+            android:text="Powered by Blender 5.3"
+            android:textColor="@color/k3d_text_secondary"
+            android:textSize="12sp"
+            android:gravity="center" />
     </LinearLayout>
 
     <Button
         android:id="@+id/launcher_button"
         android:layout_width="match_parent"
-        android:layout_height="64dp"
+        android:layout_height="60dp"
         android:layout_marginTop="40dp"
+        android:layout_marginHorizontal="24dp"
         android:background="@drawable/launch_button"
-        android:text="Launch Blender"
+        android:text="Launch Kronos3D"
         android:textAllCaps="false"
-        android:textColor="@color/bl_text_primary"
-        android:textSize="20sp"
-        android:textStyle="bold" />
+        android:textColor="@color/k3d_text_primary"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.02" />
+
+    <!-- Disclaimer -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="28dp"
+        android:gravity="center"
+        android:text="Unofficial port — Not affiliated with Blender Foundation"
+        android:textColor="@color/k3d_text_secondary"
+        android:textSize="11sp" />
 
 </LinearLayout>

@@ -41,6 +41,7 @@
 #include "BLI_task_c.hh"
 #include "BLI_threads.hh"
 #include "BLI_utildefines.hh"
+#include "GPU_context.hh"
 
 /* Mostly initialization functions. */
 #include "BKE_appdir.hh"
@@ -332,7 +333,7 @@ extern "C" int GHOST_HACK_getFirstFile(char buf[]);
 #ifdef WITH_GHOST_ANDROID
 /* Android owns the frame loop; the NativeActivity glue calls this to init. */
 namespace blender {
-void GHOST_androidfinalize(bContext *C);
+void GHOST_androidfinalize(bContext *C, GPUContext *gpu_ctx);
 int GHOST_android_launch(int argc, const char **argv);
 }  // namespace blender
 int blender::GHOST_android_launch(int argc, const char **argv)
@@ -501,7 +502,9 @@ int main(int argc,
   /* Initialize path to executable. */
   BKE_appdir_program_path_init(argv[0]);
 
+  #ifndef __ANDROID__
   BLI_threadapi_init();
+#endif
 
   BKE_blender_globals_init(); /* `blender.cc` */
 
@@ -695,7 +698,13 @@ int main(int argc,
       fprintf(stderr, "[BlenderAndroid] creator: event loop ready (init %.1f ms)\n", init_ms);
       fflush(stderr);
     }
-    GHOST_androidfinalize(C);
+    /* Hand the context to `android_main`, together with the GPU context the window
+     * was created with. The main loop runs on the glue thread, where the backend's
+     * active context is still null (`active_ctx` is thread_local and was only set
+     * here, on the init thread), so the loop adopts it explicitly before drawing.
+     * `GPU_context_active_get()` is read on this thread, where it is the one that
+     * `GPU_context_create()` set. */
+    GHOST_androidfinalize(C, GPU_context_active_get());
   }
 #else
     WM_main(C);
