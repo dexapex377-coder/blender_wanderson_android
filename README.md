@@ -130,10 +130,13 @@ reuse it.
 
 ### Kronos3D
 
-The Kronos3D contributors' own work: the **Blender 5.3 build method used here**,
-the thread-ownership and GPU-context fixes, the shortcut system and the pie
-menu that took the place of the on-screen keyboard, the rebranding, the
-launcher, and the split native/APK packaging workflows.
+The Kronos3D contributors' own work in this tree: the thread-ownership and
+GPU-context fixes, the shortcut system and the pie menu that took the place of
+the on-screen keyboard, the rebranding, the launcher, and the split native/APK
+packaging workflows. The Blender 5.3 build method used here is simfeo's
+toolchain (the cross-compile plumbing, `env.sh`, the dependency stack and
+`build_files/android/BUILDING.md`), carried forward through Wanderson's fork.
+Our separate build method lives in another repo and is not used in this tree.
 
 - Repository — <https://github.com/dexapex377-coder/kronos3D>
 
