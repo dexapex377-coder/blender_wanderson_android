@@ -89,6 +89,10 @@ jobs:
           fi
 
       - name: Download native artifacts
+        env:
+          # gh infers the repository from the git checkout, and this step runs
+          # from the workspace root while the checkout lives in blender/.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           gh run download "${{ steps.native.outputs.run_id }}" -n kronos3d-native -D /tmp/native-artifacts
