@@ -145,7 +145,10 @@ jobs:
           set -euo pipefail
           cd blender
           git lfs install --local
-          INCLUDE="release/datafiles/**,scripts/**,assets/**,locale/**"
+          # res/ holds the launcher icons, and .gitattributes routes *.png
+          # through LFS: without them they stay pointer files and aapt2 dies
+          # with "failed to read PNG signature".
+          INCLUDE="release/datafiles/**,scripts/**,assets/**,locale/**,build_files/android/apk/app/src/main/res/**"
           git lfs pull --include="$INCLUDE"
           echo "LFS files resolved."
 
@@ -161,6 +164,18 @@ jobs:
           echo "First asset $ASSET size: $SIZE_AS"
           [ "$SIZE_AS" -gt 1024 ] || { echo "ERROR: $ASSET is still an LFS stub"; exit 1; }
           echo "Assets OK."
+
+          # Any unresolved pointer under res/ surfaces much later as an opaque
+          # aapt2 error, so catch it here.
+          BAD=0
+          while IFS= read -r f; do
+            if head -c 40 "$f" 2>/dev/null | grep -q "git-lfs.github.com/spec/v1"; then
+              echo "ERROR: unresolved LFS pointer: $f"
+              BAD=1
+            fi
+          done < <(find build_files/android/apk/app/src/main/res -type f)
+          [ "$BAD" -eq 0 ] || { echo "ERROR: res/ still has LFS pointers"; exit 1; }
+          echo "res/ LFS pointers: none"
 
       - name: Install host build tools
         run: |
