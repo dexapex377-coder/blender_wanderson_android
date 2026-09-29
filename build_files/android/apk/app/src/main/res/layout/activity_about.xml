@@ -62,7 +62,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
             android:lineSpacingExtra="3dp"
-            android:text="Blender is made and maintained by the Blender Foundation and a large community of contributors. Kronos3D is unofficial and is not affiliated with or endorsed by the Blender Foundation. "Blender" is a trademark of its owners, used here only to say what this is derived from."
+            android:text="Blender is made and maintained by the Blender Foundation and a large community of contributors. Kronos3D is unofficial and is not affiliated with or endorsed by the Blender Foundation. Blender is a trademark of its owners, used here only to say what this is derived from."
             android:textColor="@color/k3d_text_secondary"
             android:textSize="11sp" />
 
