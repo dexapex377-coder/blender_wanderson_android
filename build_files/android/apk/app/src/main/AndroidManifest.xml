@@ -24,7 +24,7 @@
 
     <application
         android:label="Kronos3D"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Kronos3D"
         android:hasCode="true"
         android:allowBackup="true"

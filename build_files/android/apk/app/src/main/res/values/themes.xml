@@ -16,7 +16,7 @@
     <style name="Theme.Kronos3D" parent="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
         <item name="android:windowBackground">@color/k3d_background</item>
         <item name="android:windowSplashScreenBackground">@color/k3d_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
         <item name="android:windowSplashScreenIconBackgroundColor">@color/k3d_background</item>
     </style>
 
@@ -26,7 +26,7 @@
          interface dark. -->
     <style name="Theme.Kronos3D.Launcher" parent="Theme.Kronos3D">
         <item name="android:windowBackground">@color/k3d_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
         <item name="android:windowSplashScreenIconBackgroundColor">@color/k3d_background</item>
     </style>
 
