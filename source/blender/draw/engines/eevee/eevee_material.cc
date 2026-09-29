@@ -190,7 +190,7 @@ MaterialPass MaterialModule::material_pass_get(Object *ob,
               break;
             }
             /* Small sleep to avoid busy-waiting; async worker runs in background. */
-            BLI_sleep_millisec(10);
+            BLI_time_sleep_ms(10);
           }
 #  else
           /* Non-Android: use the existing blocking wait via condition variable. */
