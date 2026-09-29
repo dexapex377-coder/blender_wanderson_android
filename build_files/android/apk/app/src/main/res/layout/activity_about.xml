@@ -10,10 +10,15 @@
     android:fillViewport="true"
     android:scrollbars="none">
 
+    <!-- match_parent, not a fixed width: this device is 1080x2400 at density
+         2.75, so a portrait screen is only ~392dp wide. A 600dp card overflows
+         it sideways and the right-hand text falls off the screen. Margins give
+         the card its inset on every rotation. -->
     <LinearLayout
-        android:layout_width="600dp"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
+        android:layout_marginHorizontal="18dp"
         android:background="@drawable/launcher_panel"
         android:orientation="vertical"
         android:paddingHorizontal="22dp"
