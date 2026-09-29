@@ -432,6 +432,7 @@ jobs:
           set -o pipefail
           # Restore target build libs (libblender.so + bridge .so)
           mkdir -p blender_build_android/build_android_full/lib
+          mkdir -p blender_build_android/lib/android_arm64
           cp /tmp/native-artifacts/build_android_full/lib/* blender_build_android/build_android_full/lib/
           # Restore host tools
           cp -r /tmp/native-artifacts/host_tools blender_build_android/build_host_tools_full
