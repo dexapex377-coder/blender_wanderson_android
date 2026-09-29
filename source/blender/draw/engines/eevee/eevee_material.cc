@@ -7,6 +7,7 @@
  */
 
 #include "BLI_time.hh"
+#include "CLG_log.h"
 #include "DNA_material_types.h"
 
 #include "BKE_lib_id.hh"
@@ -15,10 +16,15 @@
 #include "BKE_node_legacy_types.hh"
 #include "BKE_scene.hh"
 
+#include "GPU_material.hh"
+#include "GPU_pass.hh"
+
 #include "eevee_instance.hh"
 #include "eevee_material.hh"
 
 namespace blender::eevee {
+
+static CLG_LogRef LOG = {"eevee.material"};
 
 /* -------------------------------------------------------------------- */
 /** \name Material
@@ -169,8 +175,34 @@ MaterialPass MaterialModule::material_pass_get(Object *ob,
     }
     case GPU_MAT_QUEUED:
       queued_shaders_count++;
-      matpass.gpumat = inst_.shaders.material_shader_get(
-          default_mat, default_mat->nodetree, pipeline_type, geometry_type, false, nullptr);
+      /* Wait for the async compilation to finish instead of synchronous fallback.
+       * On Android, use a timeout to avoid ANR (app not responding) dialog.
+       * Other platforms wait indefinitely as before. */
+      {
+        GPUPass *pass = GPU_material_get_pass(matpass.gpumat);
+        if (pass) {
+#  ifdef __ANDROID__
+          /* Wait up to 30 seconds for compilation to complete. */
+          const double deadline = BLI_time_now_seconds() + 30.0;
+          while (GPU_pass_status(pass) == GPU_PASS_QUEUED) {
+            GPU_pass_ensure_its_ready(pass);
+            if (BLI_time_now_seconds() >= deadline) {
+              CLOG_WARN(&LOG, "EEVEE material compilation timed out after 30s, falling back to default material");
+              break;
+            }
+            /* Small sleep to avoid busy-waiting. */
+            BLI_sleep_millisec(10);
+          }
+#  else
+          GPU_pass_ensure_its_ready(pass);
+#  endif
+        }
+        /* If still queued after wait (timeout on Android), fall back to default material. */
+        if (GPU_material_status(matpass.gpumat) == GPU_MAT_QUEUED) {
+          matpass.gpumat = inst_.shaders.material_shader_get(
+              default_mat, default_mat->nodetree, pipeline_type, geometry_type, false, nullptr);
+        }
+      }
       break;
     case GPU_MAT_FAILED:
     default:
