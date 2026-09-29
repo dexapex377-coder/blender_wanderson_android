@@ -376,6 +376,30 @@ jobs:
           # Prebuilt x64 libs (for host)
           cp -r blender/lib/linux_x64 /tmp/native-artifacts/prebuilt_x64
 
+      - name: Upload native artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kronos3d-native
+          path: /tmp/native-artifacts/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Set native SHA for downstream
+        id: set-native-sha
+        run: echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-native-logs
+          path: |
+            build_native.log
+            blender_build_android/build_host_tools_full/CMakeCache.txt
+            blender_build_android/build_android_full/CMakeCache.txt
+            blender_build_android/**/*.log
+          if-no-files-found: ignore
+
   build-apk:
     name: Build APK (package only, uses cached .so)
     runs-on: ubuntu-latest
