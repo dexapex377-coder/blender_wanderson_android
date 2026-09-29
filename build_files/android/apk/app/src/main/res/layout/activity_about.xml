@@ -94,7 +94,7 @@
             android:layout_marginTop="3dp"
             android:lineSpacingExtra="3dp"
             android:text="idimus (a.k.a. simfeo) wrote the first working arm64/Vulkan port, and with it the cross-compile toolchain this tree still builds on: the NDK plumbing, env.sh, the dependency stack, and build_files/android/BUILDING.md. Every later port starts from that bring-up."
-            android:textColor="@color=k3d_text_secondary"
+            android:textColor="@color/k3d_text_secondary"
             android:textSize="11sp" />
 
         <TextView
@@ -115,7 +115,7 @@
             android:layout_marginTop="12dp"
             android:letterSpacing="0.08"
             android:text="THE FORK THIS TREE IS BASED ON"
-            android:textColor="@color=k3d_text_primary"
+            android:textColor="@color/k3d_text_primary"
             android:textSize="10sp"
             android:textStyle="bold" />
 
