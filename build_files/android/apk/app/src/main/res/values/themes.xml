@@ -28,6 +28,9 @@
         <item name="android:windowBackground">@color/k3d_background</item>
         <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
         <item name="android:windowSplashScreenIconBackgroundColor">@color/k3d_background</item>
+        <!-- The credits screen autoLinks its URLs, and the platform default
+             link colour is a blue that fights the palette. -->
+        <item name="android:textColorLink">@color/k3d_blue</item>
     </style>
 
 </resources>

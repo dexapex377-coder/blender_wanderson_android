@@ -50,6 +50,16 @@
             </intent-filter>
         </activity>
 
+        <!-- Credits and the code quality notice. No native code, no
+             screenOrientation: it is reached from the launcher, which is
+             already following the device rotation, so letting this follow it too
+             avoids a rotation jump on the way in. -->
+        <activity
+            android:name="com.kronos3d.app.AboutActivity"
+            android:label="Credits"
+            android:theme="@style/Theme.Kronos3D.Launcher"
+            android:exported="false" />
+
         <!-- BlenderActivity extends NativeActivity; loads libblender.so and
              bridges soft-keyboard IME text to native.
 

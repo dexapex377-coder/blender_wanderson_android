@@ -12,4 +12,5 @@
     <color name="k3d_text_secondary">#B0B0B0</color>
     <color name="k3d_button_disabled">#555555</color>
     <color name="k3d_progress_track">#2A2A2A</color>
+    <color name="k3d_warning_text">#F0C88A</color>
 </resources>

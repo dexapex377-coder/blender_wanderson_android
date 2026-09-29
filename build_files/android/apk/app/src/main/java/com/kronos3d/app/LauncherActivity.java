@@ -36,6 +36,12 @@ public class LauncherActivity extends Activity {
        * taps to open. */
       finish();
     });
+
+    /* The attribution and the AI-assisted-code notice. Not folded into the
+     * launch path on purpose: it must never be one more tap between the user
+     * and the app, but it has to be there. */
+    Button credits = findViewById(R.id.launcher_credits);
+    credits.setOnClickListener(view -> startActivity(new Intent(this, AboutActivity.class)));
   }
 
   /* versionName out of the manifest, which package.sh keeps in step with the
