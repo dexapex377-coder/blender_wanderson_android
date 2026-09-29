@@ -249,6 +249,9 @@ jobs:
           cd blender
           export JAVA_HOME="${{ steps.setup-java.outputs.path }}"
           export ANDROID_HOME="$HOME/android-sdk"
+          # env.sh defaults to NDK 28; the .so and the packaging tools were
+          # built with 30, and package.sh needs its llvm-strip/readelf.
+          export ANDROID_NDK_VERSION="${{ steps.setup-ndk.outputs.ndk-full-version }}"
           export ANDROID_API=31
           bash build_files/android/build_apk.sh full --package-only 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
 
