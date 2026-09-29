@@ -1,79 +1,145 @@
-<!--
-Keep this document short & concise,
-linking to external resources instead of including content in-line.
-See 'release/text/readme.html' for the end user read-me.
--->
+<!-- Kronos3D: the Kronos3D header replaces the upstream read-me that follows. -->
 
-# Blender for Android
+# Kronos3D
 
-**An unofficial fork of Blender, ported to Android. arm64, Vulkan, built and
-tested on a Galaxy S24 Ultra.**
+**An unofficial port of Blender to Android. arm64, Vulkan, GPL-3.0.**
 
-![Blender screenshot](https://code.blender.org/wp-content/uploads/2018/12/springrg.jpg "Blender screenshot")
+Kronos3D is a fork of the Android Blender port lineage: the original bring-up,
+the cross-compilation of the dependency chain, and the Vulkan/GHOST work that
+made Blender usable on a phone. It is maintained here as a study and hobby
+project.
 
-## Demonstration
+Unofficial. Not affiliated with, endorsed by, or supported by the Blender
+Foundation or the Blender developers. "Blender" is a trademark of its owners and
+is used here only to say what this software is derived from.
 
-[![Watch the Android demo on YouTube](https://img.youtube.com/vi/qzdrdLbK7Kw/hqdefault.jpg)](https://www.youtube.com/watch?v=qzdrdLbK7Kw)
+## Status
 
-[Watch the Android demonstration on YouTube](https://www.youtube.com/watch?v=qzdrdLbK7Kw)
+Alpha, and honestly labelled as such. It runs, it opens a file, and the
+viewport draws — but treat it as a sketchbook, not a reference
+implementation. See **About the code** below before you rely on it for
+anything.
 
-## A study project
+Developed and tested on an arm64 Android device (Moto G56 5G) over ADB.
 
-This started as a way to learn, and that is what it stayed. It is not
-maintained, and there is no active support behind it: an open source project
-deserves time that I do not have right now, and saying so plainly beats leaving
-people waiting for an answer that is not coming.
+## Building
 
-It is public because it works, and because some of what is in here might be
-useful to someone. The on-screen keyboard, for example, is a native one drawn by
-Blender itself that sends real key events, so it types into any field, holds
-Ctrl, Shift and Alt, and fires every shortcut in the keymap. If any of this is
-worth something to the Blender developers, or to anyone porting Blender to a
-touch device, take it.
+Two workflows, split on purpose:
 
-Anyone who wants it for study is welcome to download it, build it and
-contribute. Nothing here is waiting on permission.
+| Workflow | What it does |
+| --- | --- |
+| **Kronos3D Native** | Cross-compiles the dependency chain and `libblender.so`, then publishes a `kronos3d-native` artifact. |
+| **Kronos3D APK** | Downloads a successful native artifact and packages the APK. It never compiles anything. |
 
-One warning: this tree does not follow Blender's own structure everywhere. It
-carries a lot of experiments, and some of them left marks. Read it as a
-sketchbook, not as a reference implementation.
+The point of the split is iteration speed. A change to Java, the manifest,
+layouts, resources or the launcher repackages in minutes, reusing the last
+`.so` that built cleanly; you only pay for a native run when you touch C, C++
+or the build itself. `Kronos3D APK` takes the most recent successful native
+run by default, and accepts an explicit run id when you want to reproduce a
+specific binary.
 
-## Credits
-
-This port did not start with me. It started with [**@idimus**](https://www.reddit.com/user/idimus/)
-(a.k.a. simfeo), who did the hard bring up work, and whose release is
-the build this fork was derived from:
-
-- <https://github.com/simfeo/blender/releases/tag/android-alpha-1>
-- @idimus / simfeo's releases: <https://github.com/simfeo/blender/releases>
-
-And of course **Blender** itself, made and maintained by the Blender Foundation
-and its community. None of this exists without them.
-
-The adjustments in this fork are by **Wanderson M. Pimenta**.
+The build itself is inherited from the fork below, whose
+[ANDROID_AI_GUIDE.md](https://github.com/Wanderson-Magalhaes/blender_for_android/blob/main/ANDROID_AI_GUIDE.md)
+is still the most complete map of this tree: prerequisites, the dependency
+build, the feature profiles, the flags that matter, driving a device over ADB,
+and a file-by-file list of the changes with links. A Kronos3D-specific guide
+replacing it does not exist yet.
 
 ## About the code
 
-I am new to C++. I wrote my first line of code 19 years ago, but this port was
-my first real experience with the language, against a codebase far larger than
-me. **ChatGPT Sol** and **Claude Opus 5** are what made it possible: they carried
-the cross compilation of dependency after dependency and a great deal of the
-debugging. Without them I would not have had the time to even run these
-experiments, let alone finish them.
+**This is AI-assisted code, and it is not reviewed to production standards.
+Expect bugs.**
 
-## Building and installing
+The cross-compilation of one dependency after another, the debugging of driver
+and threading faults, and much of the packaging work in this tree were carried
+out with heavy AI assistance. That is what made the port possible at all, and
+it is also exactly why you should be careful with the result:
 
-Everything you need is in **[ANDROID\_AI\_GUIDE.md](ANDROID_AI_GUIDE.md)**:
-prerequisites, the dependency build, the two feature sets, the flags that
-matter, the traps that end in a build that looks fine while the device runs old
-code, how to drive a device over ADB, and a map of every change with a link to
-the file it lives in.
+- Code may be **incorrect, inconsistent, or plainly wrong**, in ways that
+  compile cleanly and only show up at runtime.
+- **Rendering, GPU and threading code is the risky part.** A mistake there can
+  produce a black viewport, a corrupted frame or a crash rather than an error
+  message.
+- **Performance and memory behaviour are unmeasured.** Nothing here has been
+  profiled or tuned for general use.
+- There is **no test suite, no code review, and no guarantee of correctness**.
+- Changes are made quickly and often land in the same commit that broke
+  something else. The history is a record of experiments, not a curated patch
+  series.
+
+The lineage this tree inherits carries the same warning and says it more
+directly: it is a sketchbook, and some of the experiments left marks. If you
+want a reliable Blender on Android, use a supported build or the official
+desktop release.
+
+**Contributing:** welcome, but please read the code before you rely on it, and
+open issues with a `adb logcat` excerpt and the device model. Reports of real
+device crashes are the most useful thing you can send.
+
+## Credits
+
+This port did not start here, and none of it exists without the work of the
+people below.
+
+### Blender
+
+Blender is made and maintained by the **Blender Foundation** and a large
+community of contributors. Everything in `source/`, `intern/`, `extern/` and
+the rest of the tree is upstream Blender, licensed GPL-3.0-or-later, and none
+of it would exist without them.
+
+- Main site — <https://www.blender.org>
+- About the foundation — <https://www.blender.org/about/foundation/>
+- Source and issue tracker — <https://projects.blender.org>
+- Code hosting / contributions — <https://projects.blender.org/blender/blender>
+- Developer documentation — <https://developer.blender.org/docs/>
+- User manual — <https://docs.blender.org/manual/en/latest/index.html>
+- Community and forums — <https://www.blender.org/community/> · <https://devtalk.blender.org>
+- License (GPL-3.0) — <https://www.blender.org/about/license/>
+
+### The original Android port
+
+**@idimus** (a.k.a. **simfeo**) did the initial bring-up: the first working
+arm64/Vulkan build, the dependency bring-up, and the release that the later
+forks derive from. This tree would not exist without it.
+
+- Repository — <https://github.com/simfeo/blender>
+- First public Android build (`android-alpha-1`) — <https://github.com/simfeo/blender/releases/tag/android-alpha-1>
+- Releases — <https://github.com/simfeo/blender/releases>
+- Reddit profile — <https://www.reddit.com/user/idimus/>
+
+### The fork this tree is based on
+
+**Wanderson M. Pimenta** carried the adjustments that `blender_for_android`
+is: the long tail of CMake, toolchain and packaging fixes, the device bring-up
+notes, and the guide this project still points at. Most of the structure of the
+Android build in this tree comes from there.
+
+- Repository — <https://github.com/Wanderson-Magalhaes/blender_for_android>
+- Demonstration video — <https://www.youtube.com/watch?v=qzdrdLbK7Kw>
+- Build guide — <https://github.com/Wanderson-Magalhaes/blender_for_android/blob/main/ANDROID_AI_GUIDE.md>
+
+### Kronos3D
+
+Rebranding, the launcher, the packaging workflows, and the thread-ownership
+and GPU-context fixes are the work of the Kronos3D contributors.
+
+- Repository — <https://github.com/dexapex377-coder/kronos3D>
 
 ## License
 
-Blender is licensed under the GNU General Public License, Version 3, and this
-fork inherits it. If you distribute a binary built from this tree, the matching
-source has to go with it.
+Kronos3D is licensed under the **GNU General Public License, Version 3 or
+later**, inherited from Blender. If you distribute a binary built from this
+tree, you must also provide the corresponding source code.
+
+Individual files may carry a different but compatible license; see
+<https://www.blender.org/about/license/>.
+
+## Disclaimer
+
+Kronos3D is provided as-is, with no warranty of any kind. The authors are not
+liable for damage arising from its use, including data loss. Test it on
+something you can afford to lose.
 
 ***
 
