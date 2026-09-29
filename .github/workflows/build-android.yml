@@ -375,3 +375,140 @@ jobs:
           cp -r blender_build_android/lib/android_arm64 /tmp/native-artifacts/prebuilt_arm64
           # Prebuilt x64 libs (for host)
           cp -r blender/lib/linux_x64 /tmp/native-artifacts/prebuilt_x64
+
+  build-apk:
+    name: Build APK (package only, uses cached .so)
+    runs-on: ubuntu-latest
+    needs: build-native
+    if: always() && needs.build-native.result == 'success'
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: 1
+      CCACHE_COMPRESSLEVEL: 6
+      CCACHE_COMPILERCHECK: content
+
+    steps:
+      - name: Checkout this repository (main, no LFS)
+        uses: actions/checkout@v4
+        with:
+          path: blender
+          ref: main
+          lfs: false
+
+      - name: Download native artifacts from build-native
+        uses: actions/download-artifact@v4
+        with:
+          name: kronos3d-native
+          path: /tmp/native-artifacts
+
+      - name: Restore layout for package.sh (exact layout it expects)
+        run: |
+          set -o pipefail
+          # Restore target build libs (libblender.so + bridge .so)
+          mkdir -p blender_build_android/build_android_full/lib
+          cp /tmp/native-artifacts/build_android_full/lib/* blender_build_android/build_android_full/lib/
+          # Restore host tools
+          cp -r /tmp/native-artifacts/host_tools blender_build_android/build_host_tools_full
+          # Restore prebuilt ARM64 libs (LIBDIR for package.sh)
+          cp -r /tmp/native-artifacts/prebuilt_arm64/* blender_build_android/lib/android_arm64/
+          # Restore prebuilt x64 libs
+          cp -r /tmp/native-artifacts/prebuilt_x64 blender/lib/linux_x64
+          echo "Native artifacts restored:"
+          ls -la blender_build_android/build_android_full/lib/
+          ls -la blender_build_android/lib/android_arm64/python/
+
+      - name: Resolve required Git LFS files from the GitHub store
+        run: |
+          set -o pipefail
+          cd blender
+          git lfs install --local
+          INCLUDE="release/datafiles/**,scripts/**,assets/**,locale/**"
+          git lfs pull --include="$INCLUDE"
+          echo "LFS files resolved."
+
+      - name: Verify resolved LFS files
+        run: |
+          set -o pipefail
+          cd blender
+          SIZE_SB=$(stat -c%s release/datafiles/startup.blend)
+          echo "startup.blend size: $SIZE_SB (real content, not a stub)"
+          [ "$SIZE_SB" -gt 1024 ] || { echo "ERROR: startup.blend is an LFS stub"; exit 1; }
+          ASSET=$(git ls-files 'assets/**/*.blend' | head -1)
+          SIZE_AS=$(stat -c%s "$ASSET")
+          echo "First asset $ASSET size: $SIZE_AS"
+          [ "$SIZE_AS" -gt 1024 ] || { echo "ERROR: $ASSET is still an LFS stub"; exit 1; }
+          echo "Assets OK."
+
+      - name: Cache staged Android SDK
+        id: cache-sdk
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/android-sdk
+          key: android-sdk-30.0.14904198
+
+      - name: Stage Android SDK
+        id: sdk
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          SDK="$HOME/android-sdk"
+          mkdir -p "$SDK/licenses"
+          cp "$ANDROID_HOME/licenses/"* "$SDK/licenses/" 2>/dev/null || true
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            "$SDKM" --sdk_root="$SDK" \
+              "build-tools;35.0.1" \
+              "platforms;android-35" \
+              "platform-tools"
+          else
+            echo "ERROR: sdkmanager not found at $SDKM" >&2
+            exit 1
+          fi
+
+      - uses: actions/cache/save@v4
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        with:
+          path: ~/android-sdk
+          key: android-sdk-30.0.14904198
+
+      - name: Setup JDK 17
+        id: setup-java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Build APK (package.sh only, uses prebuilt .so)
+        run: |
+          set -o pipefail
+          cd blender
+          export JAVA_HOME="${{ steps.setup-java.outputs.path }}"
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_API=31
+          # Only package the APK using prebuilt .so
+          bash build_files/android/build_apk.sh full --package-only 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kronos3d-android-apk
+          path: blender_build_android/android_apk_stage_full/blender-full.apk
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-apk-logs
+          path: |
+            build_apk.log
+            blender_build_android/**/*.log
+          if-no-files-found: ignore
