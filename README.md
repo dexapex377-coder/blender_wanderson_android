@@ -110,10 +110,13 @@ forks derive from. This tree would not exist without it.
 
 ### The fork this tree is based on
 
-**Wanderson M. Pimenta** carried the adjustments that `blender_for_android`
-is: the long tail of CMake, toolchain and packaging fixes, the device bring-up
-notes, and the guide this project still points at. Most of the structure of the
-Android build in this tree comes from there.
+**Wanderson** ([@Wanderson-Magalhaes](https://github.com/Wanderson-Magalhaes))
+carried the adjustments that `blender_for_android` is: the long tail of CMake,
+toolchain and packaging fixes, the device bring-up notes, and the guide this
+project still points at. Most of the structure of the Android build in this
+tree comes from there. (Cited by handle: the account's display name and his
+own read-me disagree with each other, and commits are signed simply
+"Wanderson".)
 
 - Repository — <https://github.com/Wanderson-Magalhaes/blender_for_android>
 - Demonstration video — <https://www.youtube.com/watch?v=qzdrdLbK7Kw>
