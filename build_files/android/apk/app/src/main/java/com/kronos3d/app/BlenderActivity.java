@@ -30,8 +30,6 @@ import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
-import android.widget.ProgressBar;
-import android.widget.TextView;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -76,60 +74,9 @@ public class BlenderActivity extends NativeActivity {
 
   private InputView inputView;
 
-  /* Shader warmup overlay. The counts are written from the native thread and
-   * read on the UI thread, hence volatile: the only thing that can be done with
-   * them before the view exists is store them, and this is the record of it. */
-  private View warmupOverlay;
-  private ProgressBar warmupProgress;
-  private TextView warmupCount;
-  private volatile boolean warmupDone;
-  private volatile int warmupCurrent;
-  private volatile int warmupTotal;
-
-  /* Native reports ready when the warmup finishes, but it does not report
-   * anything at all if it dies on the way there. Without a floor, the overlay
-   * would sit on top of a window that is already usable and the app would look
-   * frozen. */
-  private static final long WARMUP_OVERLAY_TIMEOUT_MS = 30000L;
-
   private native void nativeOnCommitText(String text);
   private native void nativeOnKey(int keycode, int action, int metaState);
   private native void nativeOpenMainFile(String path);
-  private native void nativeSkipShaderWarmup();
-
-  /* ---- Shader warmup callbacks (called from native) ---- */
-
-  /**
-   * Called from native during shader pre-compilation to report progress.
-   * Runs on the native thread; posts to UI thread for safe view updates.
-   * Both numbers are real: `current` is shaders finished, `total` is the queue
-   * that Phase 3 measured when it started, so the bar is determinate.
-   */
-  public void onShaderProgress(final int current, final int total) {
-    warmupCurrent = current;
-    warmupTotal = total;
-    runOnUiThread(() -> updateWarmupProgress(current, total));
-  }
-
-  /**
-   * Called from native when all shaders are compiled (or skipped/timed out).
-   * Takes the overlay down and lets the viewport show through.
-   */
-  public void onShadersReady() {
-    warmupDone = true;
-    runOnUiThread(this::hideWarmupOverlay);
-  }
-
-  /**
-   * Called from the overlay when the user taps "Skip".
-   * Lets remaining shaders compile on-demand in background.
-   */
-  public void onSkipWarmup() {
-    nativeSkipShaderWarmup();
-    /* Do not wait for the native round trip: the flag is checked once at the
-     * top of the warmup loop, so the next iteration already honours it. */
-    hideWarmupOverlay();
-  }
 
   @Override
   protected void onCreate(Bundle state) {
@@ -147,67 +94,6 @@ public class BlenderActivity extends NativeActivity {
 
     inputView = new InputView(this);
     addContentView(inputView, new ViewGroup.LayoutParams(1, 1));
-
-    showWarmupOverlay();
-  }
-
-  /* ---- Shader warmup overlay ---- */
-
-  /**
-   * addContentView() and not setContentView(): NativeActivity installs its own
-   * content view in onCreate to host the native surface, and setContentView
-   * would throw that away and leave Blender with nothing to draw into. Added
-   * on top instead, which is the same trick the 1x1 input view uses above.
-   */
-  private void showWarmupOverlay() {
-    if (warmupOverlay != null) {
-      return;
-    }
-    warmupOverlay = getLayoutInflater().inflate(R.layout.activity_warmup, null);
-    warmupProgress = warmupOverlay.findViewById(R.id.warmup_progress);
-    warmupCount = warmupOverlay.findViewById(R.id.warmup_count);
-    warmupOverlay.findViewById(R.id.warmup_skip).setOnClickListener(view -> onSkipWarmup());
-    addContentView(warmupOverlay,
-        new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                                  ViewGroup.LayoutParams.MATCH_PARENT));
-
-    /* The native thread is already running by now and does not wait for us, so
-     * both the progress and the ready signal can land before the views exist.
-     * Replay whatever arrived, and if it finished, do not put the overlay up at
-     * all -- otherwise it would cover a working window forever. */
-    if (warmupDone) {
-      hideWarmupOverlay();
-      return;
-    }
-    if (warmupTotal > 0) {
-      updateWarmupProgress(warmupCurrent, warmupTotal);
-    }
-    warmupOverlay.postDelayed(this::hideWarmupOverlay, WARMUP_OVERLAY_TIMEOUT_MS);
-  }
-
-  private void hideWarmupOverlay() {
-    warmupDone = true;
-    if (warmupOverlay != null) {
-      warmupOverlay.setVisibility(View.GONE);
-    }
-  }
-
-  private void updateWarmupProgress(int current, int total) {
-    if (warmupProgress == null) {
-      return;
-    }
-    if (total > 0) {
-      warmupProgress.setIndeterminate(false);
-      warmupProgress.setMax(total);
-      warmupProgress.setProgress(current);
-      warmupCount.setText(current + "/" + total);
-    }
-    else {
-      /* Nothing was queued. Phase 2 reported that and went straight to ready,
-       * so this is only ever seen for the one frame before the overlay goes. */
-      warmupProgress.setIndeterminate(true);
-      warmupCount.setVisibility(View.GONE);
-    }
   }
 
   /* Scoped storage confines the app to its sandbox, but Blender opens and saves
