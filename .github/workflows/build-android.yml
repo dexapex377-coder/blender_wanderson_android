@@ -198,7 +198,7 @@ jobs:
 
       - name: Restore NDK cache (stable toolchain binary => ccache hits)
         uses: actions/cache/restore@v4
-        id: cache-ndk-restore
+        id: apk-cache-ndk-restore
         with:
           path: /opt/hostedtoolcache/ndk
           key: ndk-r30-beta1-${{ runner.os }}
@@ -206,14 +206,14 @@ jobs:
             ndk-r30-beta1-${{ runner.os }}
 
       - name: Setup NDK r30-beta1 (download, no license prompt)
-        id: setup-ndk
+        id: apk-setup-ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r30-beta1
 
       - name: Save NDK cache (skip if already cached)
         uses: actions/cache/save@v4
-        if: steps.cache-ndk-restore.outputs.cache-hit != 'true'
+        if: steps.apk-cache-ndk-restore.outputs.cache-hit != 'true'
         with:
           path: /opt/hostedtoolcache/ndk
           key: ndk-r30-beta1-${{ runner.os }}
@@ -221,8 +221,8 @@ jobs:
       - name: Verify NDK 30
         run: |
           set -o pipefail
-          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
-          FULL="${{ steps.setup-ndk.outputs.ndk-full-version }}"
+          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
+          FULL="${{ steps.apk-setup-ndk.outputs.ndk-full-version }}"
           echo "NDK path: $NDK"
           echo "NDK full version: $FULL"
           cat "$NDK/source.properties" | head -5
@@ -236,7 +236,7 @@ jobs:
 
       - name: Restore NDK cache (stable toolchain binary => ccache hits)
         uses: actions/cache/restore@v4
-        id: cache-ndk-restore
+        id: apk-cache-ndk-restore
         with:
           path: /opt/hostedtoolcache/ndk
           key: ndk-r30-beta1-${{ runner.os }}
@@ -244,14 +244,14 @@ jobs:
             ndk-r30-beta1-${{ runner.os }}
 
       - name: Setup NDK r30-beta1 (download, no license prompt)
-        id: setup-ndk
+        id: apk-setup-ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r30-beta1
 
       - name: Save NDK cache (skip if already cached)
         uses: actions/cache/save@v4
-        if: steps.cache-ndk-restore.outputs.cache-hit != 'true'
+        if: steps.apk-cache-ndk-restore.outputs.cache-hit != 'true'
         with:
           path: /opt/hostedtoolcache/ndk
           key: ndk-r30-beta1-${{ runner.os }}
@@ -259,8 +259,8 @@ jobs:
       - name: Verify NDK 30
         run: |
           set -o pipefail
-          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
-          FULL="${{ steps.setup-ndk.outputs.ndk-full-version }}"
+          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
+          FULL="${{ steps.apk-setup-ndk.outputs.ndk-full-version }}"
           echo "NDK path: $NDK"
           echo "NDK full version: $FULL"
           cat "$NDK/source.properties" | head -5
@@ -346,7 +346,7 @@ jobs:
           echo "=== Building FFmpeg (with PIC) ==="
           bash build_files/android/deps/build.sh ffmpeg
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
-          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
+          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
           echo "=== Validating libavutil PIC ==="
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" \
             --print-file-type "$LIBDIR/ffmpeg/lib/libavutil.a" 2>/dev/null | grep -c "ABS" || true
@@ -373,7 +373,7 @@ jobs:
           set -o pipefail
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
           STUB="$LIBDIR/.stublibs"
-          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
+          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
           CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
           AR="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           [ -x "$CLANG" ] || { echo "ERROR: NDK clang missing"; exit 1; }
@@ -411,7 +411,7 @@ jobs:
           set -o pipefail
           cd blender
           export JAVA_HOME="${{ steps.setup-java.outputs.path }}"
-          export ANDROID_NDK_VERSION="${{ steps.setup-ndk.outputs.ndk-full-version }}"
+          export ANDROID_NDK_VERSION="${{ steps.apk-setup-ndk.outputs.ndk-full-version }}"
           export ANDROID_HOME="$HOME/android-sdk"
           export ANDROID_API=31
           # Only build the native library, skip APK packaging
@@ -552,7 +552,7 @@ jobs:
 
       - name: Restore NDK cache (stable toolchain binary => ccache hits)
         uses: actions/cache/restore@v4
-        id: cache-ndk-restore
+        id: apk-cache-ndk-restore
         with:
           path: /opt/hostedtoolcache/ndk
           key: ndk-r30-beta1-${{ runner.os }}
@@ -560,14 +560,14 @@ jobs:
             ndk-r30-beta1-${{ runner.os }}
 
       - name: Setup NDK r30-beta1 (download, no license prompt)
-        id: setup-ndk
+        id: apk-setup-ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r30-beta1
 
       - name: Save NDK cache (skip if already cached)
         uses: actions/cache/save@v4
-        if: steps.cache-ndk-restore.outputs.cache-hit != 'true'
+        if: steps.apk-cache-ndk-restore.outputs.cache-hit != 'true'
         with:
           path: /opt/hostedtoolcache/ndk
           key: ndk-r30-beta1-${{ runner.os }}
@@ -575,8 +575,8 @@ jobs:
       - name: Verify NDK 30
         run: |
           set -o pipefail
-          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
-          FULL="${{ steps.setup-ndk.outputs.ndk-full-version }}"
+          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
+          FULL="${{ steps.apk-setup-ndk.outputs.ndk-full-version }}"
           echo "NDK path: $NDK"
           echo "NDK full version: $FULL"
           cat "$NDK/source.properties" | head -5
@@ -615,7 +615,7 @@ jobs:
 
       - name: Restore NDK cache (stable toolchain binary => ccache hits)
         uses: actions/cache/restore@v4
-        id: cache-ndk-restore
+        id: apk-cache-ndk-restore
         with:
           path: /opt/hostedtoolcache/ndk
           key: ndk-r30-beta1-${{ runner.os }}
@@ -623,14 +623,14 @@ jobs:
             ndk-r30-beta1-${{ runner.os }}
 
       - name: Setup NDK r30-beta1 (download, no license prompt)
-        id: setup-ndk
+        id: apk-setup-ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r30-beta1
 
       - name: Save NDK cache (skip if already cached)
         uses: actions/cache/save@v4
-        if: steps.cache-ndk-restore.outputs.cache-hit != 'true'
+        if: steps.apk-cache-ndk-restore.outputs.cache-hit != 'true'
         with:
           path: /opt/hostedtoolcache/ndk
           key: ndk-r30-beta1-${{ runner.os }}
@@ -638,8 +638,8 @@ jobs:
       - name: Verify NDK 30
         run: |
           set -o pipefail
-          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
-          FULL="${{ steps.setup-ndk.outputs.ndk-full-version }}"
+          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
+          FULL="${{ steps.apk-setup-ndk.outputs.ndk-full-version }}"
           echo "NDK path: $NDK"
           echo "NDK full version: $FULL"
           cat "$NDK/source.properties" | head -5
