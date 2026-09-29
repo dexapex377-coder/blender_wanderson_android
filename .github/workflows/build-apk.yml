@@ -168,8 +168,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config python3-dev patchelf
           patchelf --version
-          unzip --version | head -1
-          zip --version | head -2
+          # `unzip --version` exits 10 by convention, which set -e would read
+          # as a failure; ask the shell for the binaries instead.
+          command -v zip unzip ninja cmake
 
       - name: Cache staged Android SDK
         id: cache-sdk
