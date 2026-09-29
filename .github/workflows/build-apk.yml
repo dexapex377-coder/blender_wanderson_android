@@ -41,31 +41,47 @@ jobs:
           INPUT_RUN_ID: ${{ inputs.native_run_id }}
         run: |
           set -euo pipefail
-          # An explicit run id is an escape hatch for reproducing an old APK; the
-          # default is "whatever .so last built cleanly", which is the whole
-          # point of splitting these two workflows.
+          REPO="$GITHUB_REPOSITORY"
+          ARTIFACT=kronos3d-native
+
+          has_artifact() {
+            [ -n "$(gh api "repos/$REPO/actions/runs/$1/artifacts" \
+              --jq ".artifacts[] | select(.name == \"$ARTIFACT\") | .id" | head -1)" ]
+          }
+          native_job_conclusion() {
+            gh api "repos/$REPO/actions/runs/$1/jobs" \
+              --jq '[.jobs[] | select(.name | startswith("Build Native"))] | first | .conclusion // empty'
+          }
+
+          # What makes a .so reusable is a successful *native job* with its
+          # artifact uploaded, not a green run overall: runs that predate this
+          # split are red purely because their APK job died on NDK 28.
           if [ -n "${INPUT_RUN_ID:-}" ]; then
             run_id="$INPUT_RUN_ID"
+            has_artifact "$run_id" || { echo "ERROR: run $run_id has no $ARTIFACT artifact"; exit 1; }
+            nj=$(native_job_conclusion "$run_id")
+            [ -z "$nj" ] || [ "$nj" = success ] \
+              || { echo "ERROR: the native job of run $run_id is $nj, not success"; exit 1; }
+            echo "Using the requested native run: $run_id (native job: ${nj:-unknown})"
           else
-            run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-native.yml/runs?per_page=50" \
-              --jq '[.workflow_runs[] | select(.conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty')
-            [ -n "$run_id" ] || { echo "ERROR: no successful 'Kronos3D Native' run found"; exit 1; }
+            run_id=""
+            while read -r candidate; do
+              [ -n "$candidate" ] || continue
+              [ "$(native_job_conclusion "$candidate")" = success ] || continue
+              has_artifact "$candidate" || continue
+              run_id="$candidate"
+              break
+            done < <(gh api "repos/$REPO/actions/workflows/build-native.yml/runs?per_page=30" \
+                      --jq '[.workflow_runs[]] | sort_by(.created_at) | reverse | .[].id')
+            [ -n "$run_id" ] || {
+              echo "ERROR: no run with a successful native job and a $ARTIFACT artifact"
+              exit 1
+            }
             echo "Using the latest successful native run: $run_id"
           fi
 
-          head_sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '.head_sha')
-          conclusion=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '.conclusion')
-          echo "native run: $run_id  conclusion: $conclusion  sha: $head_sha"
-          [ "$conclusion" = "success" ] || { echo "ERROR: native run $run_id is $conclusion, not success"; exit 1; }
-
-          artifact_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
-            --jq '.artifacts[] | select(.name == "kronos3d-native") | .id' | head -1)
-          [ -n "$artifact_id" ] || {
-            echo "ERROR: run $run_id has no kronos3d-native artifact"
-            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" --jq '.artifacts[].name'
-            exit 1
-          }
-
+          head_sha=$(gh api "repos/$REPO/actions/runs/$run_id" --jq '.head_sha')
+          echo "native sha: $head_sha"
           echo "run_id=$run_id" >> $GITHUB_OUTPUT
           echo "head_sha=$head_sha" >> $GITHUB_OUTPUT
           if [ "$head_sha" != "$GITHUB_SHA" ]; then
