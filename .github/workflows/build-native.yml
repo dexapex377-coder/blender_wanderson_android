@@ -1,4 +1,4 @@
-name: Kronos3D Build
+name: Kronos3D Native
 
 on:
   workflow_dispatch:
@@ -15,8 +15,6 @@ jobs:
       CCACHE_COMPRESSLEVEL: 6
       CCACHE_COMPILERCHECK: content
 
-    outputs:
-      native-sha: ${{ steps.set-native-sha.outputs.sha }}
 
     steps:
       - name: Checkout this repository (main, no LFS)
@@ -130,44 +128,6 @@ jobs:
           path: ~/android-sdk
           key: android-sdk-30.0.14904198
 
-      - name: Restore NDK cache (stable toolchain binary => ccache hits)
-        uses: actions/cache/restore@v4
-        id: cache-ndk-restore
-        with:
-          path: /opt/hostedtoolcache/ndk
-          key: ndk-r30-beta1-${{ runner.os }}
-          restore-keys: |
-            ndk-r30-beta1-${{ runner.os }}
-
-      - name: Setup NDK r30-beta1 (download, no license prompt)
-        id: setup-ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r30-beta1
-
-      - name: Save NDK cache (skip if already cached)
-        uses: actions/cache/save@v4
-        if: steps.cache-ndk-restore.outputs.cache-hit != 'true'
-        with:
-          path: /opt/hostedtoolcache/ndk
-          key: ndk-r30-beta1-${{ runner.os }}
-
-      - name: Verify NDK 30
-        run: |
-          set -o pipefail
-          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
-          FULL="${{ steps.setup-ndk.outputs.ndk-full-version }}"
-          echo "NDK path: $NDK"
-          echo "NDK full version: $FULL"
-          cat "$NDK/source.properties" | head -5
-          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
-          [ -x "$CLANG" ] || { echo "ERROR: NDK 30 clang missing"; exit 1; }
-          "$CLANG" --version | head -2
-          mkdir -p "$HOME/android-sdk/ndk"
-          ln -sfn "$NDK" "$HOME/android-sdk/ndk/$FULL"
-          ls -la "$HOME/android-sdk/ndk/"
-          echo "NDK 30 OK."
-
       - name: Stage Android SDK ($HOME/android-sdk as env.sh expects)
         id: sdk
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -196,10 +156,33 @@ jobs:
           path: ~/android-sdk
           key: android-sdk-30.0.14904198
 
+      - name: Restore NDK cache (stable toolchain binary => ccache hits)
+        uses: actions/cache/restore@v4
+        id: cache-ndk-restore
+        with:
+          path: /opt/hostedtoolcache/ndk
+          key: ndk-r30-beta1-${{ runner.os }}
+          restore-keys: |
+            ndk-r30-beta1-${{ runner.os }}
+
+      - name: Setup NDK r30-beta1 (download, no license prompt)
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r30-beta1
+
+      - name: Save NDK cache (skip if already cached)
+        uses: actions/cache/save@v4
+        if: steps.cache-ndk-restore.outputs.cache-hit != 'true'
+        with:
+          path: /opt/hostedtoolcache/ndk
+          key: ndk-r30-beta1-${{ runner.os }}
+
+      - name: Verify NDK 30
         run: |
           set -o pipefail
-          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
-          FULL="${{ steps.apk-setup-ndk.outputs.ndk-full-version }}"
+          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
+          FULL="${{ steps.setup-ndk.outputs.ndk-full-version }}"
           echo "NDK path: $NDK"
           echo "NDK full version: $FULL"
           cat "$NDK/source.properties" | head -5
@@ -285,7 +268,7 @@ jobs:
           echo "=== Building FFmpeg (with PIC) ==="
           bash build_files/android/deps/build.sh ffmpeg
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
-          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
+          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
           echo "=== Validating libavutil PIC ==="
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" \
             --print-file-type "$LIBDIR/ffmpeg/lib/libavutil.a" 2>/dev/null | grep -c "ABS" || true
@@ -312,7 +295,7 @@ jobs:
           set -o pipefail
           LIBDIR="$GITHUB_WORKSPACE/blender_build_android/lib/android_arm64"
           STUB="$LIBDIR/.stublibs"
-          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
+          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
           CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
           AR="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           [ -x "$CLANG" ] || { echo "ERROR: NDK clang missing"; exit 1; }
@@ -350,7 +333,7 @@ jobs:
           set -o pipefail
           cd blender
           export JAVA_HOME="${{ steps.setup-java.outputs.path }}"
-          export ANDROID_NDK_VERSION="${{ steps.apk-setup-ndk.outputs.ndk-full-version }}"
+          export ANDROID_NDK_VERSION="${{ steps.setup-ndk.outputs.ndk-full-version }}"
           export ANDROID_HOME="$HOME/android-sdk"
           export ANDROID_API=31
           # Only build the native library, skip APK packaging
@@ -378,30 +361,101 @@ jobs:
 
       - name: Prepare native artifacts for upload (layout matches package.sh expectations)
         run: |
-          set -o pipefail
-          mkdir -p /tmp/native-artifacts
-          # Target build: libblender.so + bridge .so files (exact layout package.sh expects)
-          mkdir -p /tmp/native-artifacts/build_android_full/lib
-          cp blender_build_android/build_android_full/lib/libblender.so /tmp/native-artifacts/build_android_full/lib/
-          cp blender_build_android/build_android_full/lib/libbf_intern_*_bridge.so /tmp/native-artifacts/build_android_full/lib/ 2>/dev/null || true
-          # Host tools (msgfmt, etc.)
-          cp -r blender_build_android/build_host_tools_full /tmp/native-artifacts/host_tools
-          # Prebuilt ARM64 libs (LIBDIR for package.sh)
-          cp -r blender_build_android/lib/android_arm64 /tmp/native-artifacts/prebuilt_arm64
-          # Prebuilt x64 libs (for host)
-          cp -r blender/lib/linux_x64 /tmp/native-artifacts/prebuilt_x64
+          set -euo pipefail
+          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
+          STRIP="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          OUT=/tmp/native-artifacts
+          rm -rf "$OUT"
+          mkdir -p "$OUT/build_android_full/lib"
+
+          # 1) Target build output: libblender.so + the dlopen'd glTF bridges.
+          #    package.sh strips every jniLibs .so itself, so strip here too: the
+          #    artifact then carries what actually ships instead of a 1 GB
+          #    debug build that gets thrown away minutes later.
+          for so in blender_build_android/build_android_full/lib/libblender.so \
+                   blender_build_android/build_android_full/lib/libbf_intern_*_bridge.so; do
+            [ -f "$so" ] || continue
+            base=$(basename "$so")
+            cp "$so" "$OUT/build_android_full/lib/$base"
+            "$STRIP" --strip-unneeded "$OUT/build_android_full/lib/$base" 2>/dev/null || true
+          done
+          test -f "$OUT/build_android_full/lib/libblender.so" \
+            || { echo "ERROR: libblender.so missing from build output"; exit 1; }
+
+          # 2) WITH_PYTHON as a marker file. package.sh reads it from the build
+          #    dir, so a package-only run gets the same Python decision the
+          #    native build made -- without shipping CMakeCache.txt, whose
+          #    recorded absolute path makes build_apk.sh's drop_stale_cache wipe
+          #    the very .so we just restored.
+          if grep -q '^WITH_PYTHON:BOOL=ON$' blender_build_android/build_android_full/CMakeCache.txt; then
+            echo ON > "$OUT/with_python"
+          else
+            echo OFF > "$OUT/with_python"
+          fi
+          echo "with_python=$(cat "$OUT/with_python")"
+
+          # 3) msgfmt is the only host tool package.sh uses (locale catalogues).
+          mkdir -p "$OUT/host_tools"
+          cp blender_build_android/build_host_tools_full/bin/msgfmt "$OUT/host_tools/msgfmt"
+
+          # 4) Prebuilt ARM64 libs. package.sh resolves libblender.so's NEEDED
+          #    closure across "$LIBDIR"/*/lib, copies $LIBDIR/python/lib/python3.13
+          #    wholesale and $LIBDIR/usd/plugin for the USD file-format plugins.
+          #    Static archives, headers and cmake files are never read, so only
+          #    the shared objects (and those two resource trees) travel.
+          SRC=blender_build_android/lib/android_arm64
+          DST="$OUT/prebuilt_arm64"
+          mkdir -p "$DST"
+          ( cd "$SRC" && find . \( -name '*.so' -o -name '*.so.*' \) -print0 ) |
+            while IFS= read -r -d '' f; do
+              mkdir -p "$DST/$(dirname "$f")"
+              cp -a "$SRC/$f" "$DST/$f"
+            done
+          mkdir -p "$DST/python/lib"
+          cp -a "$SRC/python/lib/python3.13" "$DST/python/lib/python3.13"
+          # package.sh copies this as libpython3_13_bin.so (sys.executable)
+          if [ -f "$SRC/python/bin/python3.13" ]; then
+            mkdir -p "$DST/python/bin"
+            cp -a "$SRC/python/bin/python3.13" "$DST/python/bin/python3.13"
+          fi
+          mkdir -p "$DST/usd"
+          cp -a "$SRC/usd/plugin" "$DST/usd/plugin"
+          mkdir -p "$DST/openimagedenoise/lib"   # package.sh asserts no .so here
+          # libblender's own transitive deps must resolve; fail loudly now rather
+          # than shipping an APK whose dlopen()s die on first use.
+          test -d "$DST/python/lib/python3.13" || { echo "ERROR: python tree not staged"; exit 1; }
+          echo "shared objects staged: $(find "$DST" -name '*.so*' | wc -l)"
+
+          # 5) Host (x64) shared libraries, same filter. env.sh puts
+          #    lib/linux_x64/*/lib on LD_LIBRARY_PATH because the host codegen
+          #    tools are built with an rpath the loader does not honour here --
+          #    msgfmt is one of them, and without libtbb the locale step dies.
+          XSRC=blender/lib/linux_x64
+          if [ -d "$XSRC" ]; then
+            XDST="$OUT/prebuilt_x64"
+            mkdir -p "$XDST"
+            ( cd "$XSRC" && find . -path '*/lib/*.so' -print0 ) |
+              while IFS= read -r -d '' f; do
+                mkdir -p "$XDST/$(dirname "$f")"
+                cp -a "$XSRC/$f" "$XDST/$f"
+              done
+            echo "host shared objects staged: $(find "$XDST" -name '*.so' | wc -l)"
+          else
+            echo "::warning::lib/linux_x64 missing; msgfmt may fail to find libtbb"
+          fi
+
+          echo "=== artifact breakdown ==="
+          du -sh "$OUT"/* | sort -h
+          du -sh "$OUT"
 
       - name: Upload native artifacts
         uses: actions/upload-artifact@v4
         with:
           name: kronos3d-native
           path: /tmp/native-artifacts/
-          retention-days: 14
+          retention-days: 30
           if-no-files-found: error
-
-      - name: Set native SHA for downstream
-        id: set-native-sha
-        run: echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+          compression-level: 0
 
       - name: Upload logs on failure
         if: failure()
@@ -415,194 +469,3 @@ jobs:
             blender_build_android/**/*.log
           if-no-files-found: ignore
 
-  build-apk:
-    name: Build APK (package only, uses cached .so)
-    runs-on: ubuntu-latest
-    needs: build-native
-    if: always() && needs.build-native.result == 'success'
-
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPRESS: 1
-      CCACHE_COMPRESSLEVEL: 6
-      CCACHE_COMPILERCHECK: content
-
-    steps:
-      - name: Checkout this repository (main, no LFS)
-        uses: actions/checkout@v4
-        with:
-          path: blender
-          ref: main
-          lfs: false
-
-      - name: Download native artifacts from build-native
-        uses: actions/download-artifact@v4
-        with:
-          name: kronos3d-native
-          path: /tmp/native-artifacts
-
-      - name: Restore layout for package.sh (exact layout it expects)
-        run: |
-          set -o pipefail
-          # Restore target build libs (libblender.so + bridge .so)
-          mkdir -p blender_build_android/build_android_full/lib
-          mkdir -p blender_build_android/lib/android_arm64
-          mkdir -p blender/lib
-          cp /tmp/native-artifacts/build_android_full/lib/* blender_build_android/build_android_full/lib/
-          # Restore host tools
-          cp -r /tmp/native-artifacts/host_tools blender_build_android/build_host_tools_full
-          # Restore prebuilt ARM64 libs (LIBDIR for package.sh)
-          cp -r /tmp/native-artifacts/prebuilt_arm64/* blender_build_android/lib/android_arm64/
-          # Restore prebuilt x64 libs
-          cp -r /tmp/native-artifacts/prebuilt_x64 blender/lib/linux_x64
-          echo "Native artifacts restored:"
-          ls -la blender_build_android/build_android_full/lib/
-          ls -la blender_build_android/lib/android_arm64/python/
-
-      - name: Resolve required Git LFS files from the GitHub store
-        run: |
-          set -o pipefail
-          cd blender
-          git lfs install --local
-          INCLUDE="release/datafiles/**,scripts/**,assets/**,locale/**"
-          git lfs pull --include="$INCLUDE"
-          echo "LFS files resolved."
-
-      - name: Verify resolved LFS files
-        run: |
-          set -o pipefail
-          cd blender
-          SIZE_SB=$(stat -c%s release/datafiles/startup.blend)
-          echo "startup.blend size: $SIZE_SB (real content, not a stub)"
-          [ "$SIZE_SB" -gt 1024 ] || { echo "ERROR: startup.blend is an LFS stub"; exit 1; }
-          ASSET=$(git ls-files 'assets/**/*.blend' | head -1)
-          SIZE_AS=$(stat -c%s "$ASSET")
-          echo "First asset $ASSET size: $SIZE_AS"
-          [ "$SIZE_AS" -gt 1024 ] || { echo "ERROR: $ASSET is still an LFS stub"; exit 1; }
-          echo "Assets OK."
-
-      - name: Cache staged Android SDK
-        id: cache-sdk
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/android-sdk
-          key: android-sdk-30.0.14904198
-
-      - name: Restore NDK cache (stable toolchain binary => ccache hits)
-        uses: actions/cache/restore@v4
-        id: apk-cache-ndk-restore
-        with:
-          path: /opt/hostedtoolcache/ndk
-          key: ndk-r30-beta1-${{ runner.os }}
-          restore-keys: |
-            ndk-r30-beta1-${{ runner.os }}
-
-      - name: Setup NDK r30-beta1 (download, no license prompt)
-        id: apk-setup-ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r30-beta1
-
-      - name: Save NDK cache (skip if already cached)
-        uses: actions/cache/save@v4
-        if: steps.apk-cache-ndk-restore.outputs.cache-hit != 'true'
-        with:
-          path: /opt/hostedtoolcache/ndk
-          key: ndk-r30-beta1-${{ runner.os }}
-
-      - name: Verify NDK 30
-        run: |
-          set -o pipefail
-          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
-          FULL="${{ steps.apk-setup-ndk.outputs.ndk-full-version }}"
-          echo "NDK path: $NDK"
-          echo "NDK full version: $FULL"
-          cat "$NDK/source.properties" | head -5
-          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
-          [ -x "$CLANG" ] || { echo "ERROR: NDK 30 clang missing"; exit 1; }
-          "$CLANG" --version | head -2
-          mkdir -p "$HOME/android-sdk/ndk"
-          ln -sfn "$NDK" "$HOME/android-sdk/ndk/$FULL"
-          ls -la "$HOME/android-sdk/ndk/"
-          echo "NDK 30 OK."
-
-      - name: Stage Android SDK
-        id: sdk
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        run: |
-          set -o pipefail
-          SDK="$HOME/android-sdk"
-          mkdir -p "$SDK/licenses"
-          cp "$ANDROID_HOME/licenses/"* "$SDK/licenses/" 2>/dev/null || true
-          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          if [ -x "$SDKM" ]; then
-            "$SDKM" --sdk_root="$SDK" \
-              "build-tools;35.0.1" \
-              "platforms;android-35" \
-              "platform-tools"
-          else
-            echo "ERROR: sdkmanager not found at $SDKM" >&2
-            exit 1
-          fi
-
-      - uses: actions/cache/save@v4
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        with:
-          path: ~/android-sdk
-          key: android-sdk-30.0.14904198
-
-        run: |
-          set -o pipefail
-          NDK="${{ steps.apk-setup-ndk.outputs.ndk-path }}"
-          FULL="${{ steps.apk-setup-ndk.outputs.ndk-full-version }}"
-          echo "NDK path: $NDK"
-          echo "NDK full version: $FULL"
-          cat "$NDK/source.properties" | head -5
-          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
-          [ -x "$CLANG" ] || { echo "ERROR: NDK 30 clang missing"; exit 1; }
-          "$CLANG" --version | head -2
-          mkdir -p "$HOME/android-sdk/ndk"
-          ln -sfn "$NDK" "$HOME/android-sdk/ndk/$FULL"
-          ls -la "$HOME/android-sdk/ndk/"
-          echo "NDK 30 OK."
-
-      - name: Setup JDK 17
-        id: setup-java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Setup Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Build APK (package.sh only, uses prebuilt .so)
-        run: |
-          set -o pipefail
-          cd blender
-          export JAVA_HOME="${{ steps.setup-java.outputs.path }}"
-          export ANDROID_HOME="$HOME/android-sdk"
-          export ANDROID_API=31
-          # Only package the APK using prebuilt .so
-          bash build_files/android/build_apk.sh full --package-only 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: kronos3d-android-apk
-          path: blender_build_android/android_apk_stage_full/blender-full.apk
-          retention-days: 14
-          if-no-files-found: error
-
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-apk-logs
-          path: |
-            build_apk.log
-            blender_build_android/**/*.log
-          if-no-files-found: ignore

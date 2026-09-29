@@ -180,7 +180,20 @@ if grep -q "set(WITH_CYCLES ON" "$REPO_ROOT/build_files/android/android_features
   cp -R "$REPO_ROOT/intern/cycles/blender/addon" "$PAYLOAD/scripts/addons_core/cycles"
   echo "[apk] bundled the Cycles add-on"
 fi
-if grep -q '^WITH_PYTHON:BOOL=ON$' "$BUILD/CMakeCache.txt"; then
+# A package-only run restores the native build's output from an artifact, and
+# deliberately does not restore CMakeCache.txt: the absolute build path recorded
+# in it would make build_apk.sh's drop_stale_cache wipe the build dir (and the
+# libblender.so with it) before we get here. The native job therefore stamps the
+# decision it actually made into a marker file next to the .so.
+WITH_PYTHON_MARKER="$BUILD/with_python"
+if [ -f "$WITH_PYTHON_MARKER" ]; then
+  with_python=$(tr -d '[:space:]' < "$WITH_PYTHON_MARKER")
+elif grep -q '^WITH_PYTHON:BOOL=ON$' "$BUILD/CMakeCache.txt" 2>/dev/null; then
+  with_python=ON
+else
+  with_python=OFF
+fi
+if [ "$with_python" = "ON" ]; then
   mkdir -p "$PAYLOAD/python/lib"
   cp -R "$LIBDIR/python/lib/python3.13" "$PAYLOAD/python/lib/python3.13"
   echo "[apk] bundled Python runtime"

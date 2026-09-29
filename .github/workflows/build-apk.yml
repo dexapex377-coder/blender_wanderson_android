@@ -1,0 +1,250 @@
+name: Kronos3D APK
+
+# Packaging only. Takes the libblender.so from an already successful
+# "Kronos3D Native" run and rebuilds the APK, so a Java/XML/resource/manifest
+# edit never pays for a native rebuild. The native compilation method is
+# untouched -- it lives entirely in the other workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      native_run_id:
+        description: 'Native run ID to take the .so from (empty = latest successful)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  build-apk:
+    name: Build APK (package only, reuses a successful .so)
+    runs-on: ubuntu-latest
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: 1
+      CCACHE_COMPRESSLEVEL: 6
+      CCACHE_COMPILERCHECK: content
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout this repository (main, no LFS)
+        uses: actions/checkout@v4
+        with:
+          path: blender
+          ref: main
+          lfs: false
+
+      - name: Pick the native run to package
+        id: native
+        env:
+          INPUT_RUN_ID: ${{ inputs.native_run_id }}
+        run: |
+          set -euo pipefail
+          # An explicit run id is an escape hatch for reproducing an old APK; the
+          # default is "whatever .so last built cleanly", which is the whole
+          # point of splitting these two workflows.
+          if [ -n "${INPUT_RUN_ID:-}" ]; then
+            run_id="$INPUT_RUN_ID"
+          else
+            run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-native.yml/runs?per_page=50" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty')
+            [ -n "$run_id" ] || { echo "ERROR: no successful 'Kronos3D Native' run found"; exit 1; }
+            echo "Using the latest successful native run: $run_id"
+          fi
+
+          head_sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '.head_sha')
+          conclusion=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '.conclusion')
+          echo "native run: $run_id  conclusion: $conclusion  sha: $head_sha"
+          [ "$conclusion" = "success" ] || { echo "ERROR: native run $run_id is $conclusion, not success"; exit 1; }
+
+          artifact_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
+            --jq '.artifacts[] | select(.name == "kronos3d-native") | .id' | head -1)
+          [ -n "$artifact_id" ] || {
+            echo "ERROR: run $run_id has no kronos3d-native artifact"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" --jq '.artifacts[].name'
+            exit 1
+          }
+
+          echo "run_id=$run_id" >> $GITHUB_OUTPUT
+          echo "head_sha=$head_sha" >> $GITHUB_OUTPUT
+          if [ "$head_sha" != "$GITHUB_SHA" ]; then
+            echo "::warning title=.so is older than this commit::Packaging native $head_sha into sources $GITHUB_SHA. That is the intended workflow, but native/C++ changes in this commit are NOT in the APK."
+          fi
+
+      - name: Download native artifacts
+        run: |
+          set -euo pipefail
+          gh run download "${{ steps.native.outputs.run_id }}" -n kronos3d-native -D /tmp/native-artifacts
+          echo "=== downloaded ==="
+          du -sh /tmp/native-artifacts/*
+
+      - name: Restore layout for package.sh (exact layout it expects)
+        run: |
+          set -euo pipefail
+          test -f /tmp/native-artifacts/build_android_full/lib/libblender.so \
+            || { echo "ERROR: artifact has no libblender.so"; exit 1; }
+          # Target build: libblender.so + bridge .so
+          mkdir -p blender_build_android/build_android_full/lib
+          cp /tmp/native-artifacts/build_android_full/lib/* blender_build_android/build_android_full/lib/
+          # WITH_PYTHON marker; artifacts predating it shipped the whole python
+          # tree, so its presence is the same answer.
+          if [ -f /tmp/native-artifacts/with_python ]; then
+            cp /tmp/native-artifacts/with_python blender_build_android/build_android_full/with_python
+          elif [ -d /tmp/native-artifacts/prebuilt_arm64/python/lib/python3.13 ]; then
+            echo ON > blender_build_android/build_android_full/with_python
+          else
+            echo OFF > blender_build_android/build_android_full/with_python
+          fi
+          # Host tool package.sh uses for locale catalogues (new artifacts stage
+          # it flat, older ones carry the whole host build tree)
+          mkdir -p blender_build_android/build_host_tools_full/bin
+          if [ -f /tmp/native-artifacts/host_tools/msgfmt ]; then
+            cp /tmp/native-artifacts/host_tools/msgfmt blender_build_android/build_host_tools_full/bin/msgfmt
+          else
+            cp /tmp/native-artifacts/host_tools/bin/msgfmt blender_build_android/build_host_tools_full/bin/msgfmt
+          fi
+          # Prebuilt ARM64 libs (LIBDIR for package.sh)
+          mkdir -p blender_build_android/lib/android_arm64
+          cp -r /tmp/native-artifacts/prebuilt_arm64/. blender_build_android/lib/android_arm64/
+          # Host x64 libs: env.sh needs them on LD_LIBRARY_PATH for msgfmt
+          if [ -d /tmp/native-artifacts/prebuilt_x64 ]; then
+            mkdir -p blender/lib
+            cp -r /tmp/native-artifacts/prebuilt_x64 blender/lib/linux_x64
+          else
+            echo "::warning::artifact has no prebuilt_x64; msgfmt may fail on libtbb"
+          fi
+          echo "=== restored ==="
+          ls -la blender_build_android/build_android_full/lib/
+          echo "with_python=$(cat blender_build_android/build_android_full/with_python)"
+          ls -d blender_build_android/lib/android_arm64/*/lib | head -20
+          du -sh blender_build_android
+
+      - name: Resolve required Git LFS files from the GitHub store
+        run: |
+          set -euo pipefail
+          cd blender
+          git lfs install --local
+          INCLUDE="release/datafiles/**,scripts/**,assets/**,locale/**"
+          git lfs pull --include="$INCLUDE"
+          echo "LFS files resolved."
+
+      - name: Verify resolved LFS files
+        run: |
+          set -euo pipefail
+          cd blender
+          SIZE_SB=$(stat -c%s release/datafiles/startup.blend)
+          echo "startup.blend size: $SIZE_SB (real content, not a stub)"
+          [ "$SIZE_SB" -gt 1024 ] || { echo "ERROR: startup.blend is an LFS stub"; exit 1; }
+          ASSET=$(git ls-files 'assets/**/*.blend' | head -1)
+          SIZE_AS=$(stat -c%s "$ASSET")
+          echo "First asset $ASSET size: $SIZE_AS"
+          [ "$SIZE_AS" -gt 1024 ] || { echo "ERROR: $ASSET is still an LFS stub"; exit 1; }
+          echo "Assets OK."
+
+      - name: Install host build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config python3-dev patchelf
+          patchelf --version
+          unzip --version | head -1
+          zip --version | head -2
+
+      - name: Cache staged Android SDK
+        id: cache-sdk
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/android-sdk
+          key: android-sdk-30.0.14904198
+
+      - name: Stage Android SDK
+        id: sdk
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          SDK="$HOME/android-sdk"
+          mkdir -p "$SDK/licenses"
+          cp "$ANDROID_HOME/licenses/"* "$SDK/licenses/" 2>/dev/null || true
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            "$SDKM" --sdk_root="$SDK" \
+              "build-tools;35.0.1" \
+              "platforms;android-35" \
+              "platform-tools"
+          else
+            echo "ERROR: sdkmanager not found at $SDKM" >&2
+            exit 1
+          fi
+
+      - uses: actions/cache/save@v4
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        with:
+          path: ~/android-sdk
+          key: android-sdk-30.0.14904198
+
+      - name: Restore NDK cache
+        uses: actions/cache/restore@v4
+        id: cache-ndk-restore
+        with:
+          path: /opt/hostedtoolcache/ndk
+          key: ndk-r30-beta1-${{ runner.os }}
+          restore-keys: |
+            ndk-r30-beta1-${{ runner.os }}
+
+      - name: Setup NDK r30-beta1
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r30-beta1
+
+      - name: Verify NDK 30
+        run: |
+          set -euo pipefail
+          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
+          FULL="${{ steps.setup-ndk.outputs.ndk-full-version }}"
+          echo "NDK path: $NDK"
+          echo "NDK full version: $FULL"
+          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+          [ -x "$CLANG" ] || { echo "ERROR: NDK 30 clang missing"; exit 1; }
+          "$CLANG" --version | head -2
+          # env.sh resolves the NDK through $HOME/android-sdk/ndk, not through
+          # ANDROID_NDK_HOME: the previous NDK 28 was picked up from there.
+          mkdir -p "$HOME/android-sdk/ndk"
+          rm -rf "$HOME/android-sdk/ndk"/*
+          ln -sfn "$NDK" "$HOME/android-sdk/ndk/$FULL"
+          ls -la "$HOME/android-sdk/ndk/"
+
+      - name: Setup JDK 17
+        id: setup-java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build APK (package.sh only, uses prebuilt .so)
+        run: |
+          set -euo pipefail
+          cd blender
+          export JAVA_HOME="${{ steps.setup-java.outputs.path }}"
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_API=31
+          bash build_files/android/build_apk.sh full --package-only 2>&1 | tee "$GITHUB_WORKSPACE/build_apk.log"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kronos3d-android-apk
+          path: blender_build_android/android_apk_stage_full/blender-full.apk
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-apk-logs
+          path: |
+            build_apk.log
+            blender_build_android/**/*.log
+          if-no-files-found: ignore
