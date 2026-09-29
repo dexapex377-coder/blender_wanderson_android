@@ -176,24 +176,24 @@ MaterialPass MaterialModule::material_pass_get(Object *ob,
     case GPU_MAT_QUEUED:
       queued_shaders_count++;
       /* Wait for the async compilation to finish instead of synchronous fallback.
-       * On Android, use a timeout to avoid ANR (app not responding) dialog.
-       * Other platforms wait indefinitely as before. */
+       * On Android, poll with timeout to avoid ANR (app not responding) dialog.
+       * Other platforms wait indefinitely using the existing condition variable. */
       {
         GPUPass *pass = GPU_material_get_pass(matpass.gpumat);
         if (pass) {
 #  ifdef __ANDROID__
-          /* Wait up to 30 seconds for compilation to complete. */
+          /* Wait up to 30 seconds for compilation to complete, polling non-blocking. */
           const double deadline = BLI_time_now_seconds() + 30.0;
           while (GPU_pass_status(pass) == GPU_PASS_QUEUED) {
-            GPU_pass_ensure_its_ready(pass);
             if (BLI_time_now_seconds() >= deadline) {
               CLOG_WARN(&LOG, "EEVEE material compilation timed out after 30s, falling back to default material");
               break;
             }
-            /* Small sleep to avoid busy-waiting. */
+            /* Small sleep to avoid busy-waiting; async worker runs in background. */
             BLI_sleep_millisec(10);
           }
 #  else
+          /* Non-Android: use the existing blocking wait via condition variable. */
           GPU_pass_ensure_its_ready(pass);
 #  endif
         }
