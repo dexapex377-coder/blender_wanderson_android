@@ -99,9 +99,11 @@ of it would exist without them.
 
 ### The original Android port
 
-**@idimus** (a.k.a. **simfeo**) did the initial bring-up: the first working
-arm64/Vulkan build, the dependency bring-up, and the release that the later
-forks derive from. This tree would not exist without it.
+**@idimus** (a.k.a. **simfeo**) wrote the first working arm64/Vulkan port, and
+with it the **cross-compile toolchain** that every later fork builds on: the
+NDK plumbing, `env.sh`, the dependency stack, and the build documentation this
+tree still carries in `build_files/android/BUILDING.md`. Wanderson's fork is
+his build, not a rewrite of it, and this tree is that fork again.
 
 - Repository — <https://github.com/simfeo/blender>
 - First public Android build (`android-alpha-1`) — <https://github.com/simfeo/blender/releases/tag/android-alpha-1>
@@ -110,10 +112,17 @@ forks derive from. This tree would not exist without it.
 
 ### The fork this tree is based on
 
-**Wanderson-Magalhaes** carried the adjustments that `blender_for_android` is:
-the long tail of CMake, toolchain and packaging fixes, the device bring-up
-notes, and the guide this project still points at. Most of the structure of the
-Android build in this tree comes from there.
+**Wanderson-Magalhaes** is the fork this tree is built from, and it is his
+build, not a fresh one: the gestures, the on-screen keyboard and the
+Preferences-menu memory fix are his, and so are the two documents in the root
+of this tree, [`ANDROID_AI_GUIDE.md`](ANDROID_AI_GUIDE.md) and
+[`ANDROID_WHATS_NEW.md`](ANDROID_WHATS_NEW.md). He built and tested it on a
+Galaxy S24 Ultra, and a fair share of his fixes are specific to that phone,
+so a different device inherits some of them and not others.
+
+What is *not* his is the Blender 5.3 build method: Kronos3D compiles 5.3 with
+its own, and the shortcuts and pie menu here replace his keyboard rather than
+reuse it.
 
 - Repository — <https://github.com/Wanderson-Magalhaes/blender_for_android>
 - Demonstration video — <https://www.youtube.com/watch?v=qzdrdLbK7Kw>
@@ -121,8 +130,10 @@ Android build in this tree comes from there.
 
 ### Kronos3D
 
-Rebranding, the launcher, the packaging workflows, and the thread-ownership
-and GPU-context fixes are the work of the Kronos3D contributors.
+The Kronos3D contributors' own work: the **Blender 5.3 build method used here**,
+the thread-ownership and GPU-context fixes, the shortcut system and the pie
+menu that took the place of the on-screen keyboard, the rebranding, the
+launcher, and the split native/APK packaging workflows.
 
 - Repository — <https://github.com/dexapex377-coder/kronos3D>
 

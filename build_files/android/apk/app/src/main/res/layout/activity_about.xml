@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-FileCopyrightText: 2026 Kronos3D Contributors
      SPDX-License-Identifier: GPL-2.0-or-later -->
-<!-- Credits and code quality notice. The whole card scrolls: on a 2400x1080
-     landscape screen there is no height for this much text otherwise. -->
+<!-- Credits and code quality notice. The whole card scrolls. -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -10,10 +9,6 @@
     android:fillViewport="true"
     android:scrollbars="none">
 
-    <!-- match_parent, not a fixed width: this device is 1080x2400 at density
-         2.75, so a portrait screen is only ~392dp wide. A 600dp card overflows
-         it sideways and the right-hand text falls off the screen. Margins give
-         the card its inset on every rotation. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -61,15 +56,28 @@
             android:textColor="@color/k3d_warning_text"
             android:textSize="11sp" />
 
+        <!-- Blender -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
             android:lineSpacingExtra="3dp"
-            android:text="Blender is made and maintained by the Blender Foundation and a large community of contributors. Kronos3D is unofficial and is not affiliated with or endorsed by the Blender Foundation. &quot;Blender&quot; is a trademark of its owners, used here only to say what this is derived from."
+            android:text="Blender is made and maintained by the Blender Foundation and a large community of contributors. Kronos3D is unofficial and is not affiliated with or endorsed by the Blender Foundation. "Blender" is a trademark of its owners, used here only to say what this is derived from."
             android:textColor="@color/k3d_text_secondary"
             android:textSize="11sp" />
 
+        <TextView
+            android:id="@+id/about_blender_link"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:autoLink="web"
+            android:lineSpacingExtra="3dp"
+            android:text="blender.org  ·  blender.org/about/license"
+            android:textColor="@color/k3d_text_secondary"
+            android:textSize="11sp" />
+
+        <!-- Original Android port -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -85,8 +93,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="3dp"
             android:lineSpacingExtra="3dp"
-            android:text="idimus (a.k.a. simfeo) did the initial bring-up: the first working arm64/Vulkan build, the dependency bring-up, and the release the later forks derive from. None of this exists without them."
-            android:textColor="@color/k3d_text_secondary"
+            android:text="idimus (a.k.a. simfeo) wrote the first working arm64/Vulkan port, and with it the cross-compile toolchain this tree still builds on: the NDK plumbing, env.sh, the dependency stack, and build_files/android/BUILDING.md. Every later port starts from that bring-up."
+            android:textColor="@color=k3d_text_secondary"
             android:textSize="11sp" />
 
         <TextView
@@ -100,13 +108,14 @@
             android:textColor="@color/k3d_text_secondary"
             android:textSize="11sp" />
 
+        <!-- The fork this tree is based on -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:letterSpacing="0.08"
             android:text="THE FORK THIS TREE IS BASED ON"
-            android:textColor="@color/k3d_text_primary"
+            android:textColor="@color=k3d_text_primary"
             android:textSize="10sp"
             android:textStyle="bold" />
 
@@ -115,7 +124,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="3dp"
             android:lineSpacingExtra="3dp"
-            android:text="Wanderson-Magalhaes carried the adjustments this fork is: the long tail of CMake, toolchain and packaging fixes, the device bring-up notes, and the build guide. Most of the structure of the Android build here comes from there."
+            android:text="Wanderson-Magalhaes is the fork this tree is built from — it is his build, not a fresh one. His work here: the Android gestures, the on-screen keyboard (native, drawn by Blender, sends real key events, holds Ctrl/Shift/Alt), the Preferences-menu memory fix, and the two documents in the root of this tree, ANDROID_AI_GUIDE.md and ANDROID_WHATS_NEW.md. He built and tested on a Galaxy S24 Ultra; some of his fixes are specific to that device."
             android:textColor="@color/k3d_text_secondary"
             android:textSize="11sp" />
 
@@ -130,6 +139,7 @@
             android:textColor="@color/k3d_text_secondary"
             android:textSize="11sp" />
 
+        <!-- Kronos3D -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -145,7 +155,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="3dp"
             android:lineSpacingExtra="3dp"
-            android:text="Rebranding, the launcher, the split packaging workflows, and the thread-ownership and GPU-context fixes."
+            android:text="Our own Blender 5.3 build method, the GPU/context and thread-ownership fixes, the shortcut system and the pie menu that replaced the on-screen keyboard, the rebranding, the launcher, and the split native/APK packaging workflows."
             android:textColor="@color/k3d_text_secondary"
             android:textSize="11sp" />
 
@@ -160,6 +170,7 @@
             android:textColor="@color/k3d_text_secondary"
             android:textSize="11sp" />
 
+        <!-- License -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
