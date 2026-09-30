@@ -412,7 +412,7 @@ jobs:
               cp -a "$SRC/$f" "$DST/$f"
             done
           mkdir -p "$DST/python/lib"
-          cp -a "$SRC/python/lib/python3.13" "$DST/python/lib/python3.13"
+          cp -a "$SRC/python/lib/python3.13/python3.13" "$DST/python/lib/python3.13"
           # package.sh copies this as libpython3_13_bin.so (sys.executable)
           if [ -f "$SRC/python/bin/python3.13" ]; then
             mkdir -p "$DST/python/bin"
