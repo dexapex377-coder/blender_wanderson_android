@@ -415,7 +415,7 @@ jobs:
           # Prebuilt libs have Python stdlib at either python/lib/python3.13/ (flat)
           # or python/lib/python3.13/python3.13/ (nested). Try nested first.
           if [ -d "$SRC/python/lib/python3.13/python3.13" ]; then
-            cp -a "$SRC/python/lib/python3.13/python3.13" "$DST/python/lib/python3.13"
+            cp -a "$SRC/python/lib/python3.13/python3.13/." "$DST/python/lib/python3.13"
           elif [ -d "$SRC/python/lib/python3.13" ]; then
             cp -a "$SRC/python/lib/python3.13" "$DST/python/lib/python3.13"
           else
