@@ -412,7 +412,16 @@ jobs:
               cp -a "$SRC/$f" "$DST/$f"
             done
           mkdir -p "$DST/python/lib"
-          cp -a "$SRC/python/lib/python3.13/python3.13" "$DST/python/lib/python3.13"
+          # Prebuilt libs have Python stdlib at either python/lib/python3.13/ (flat)
+          # or python/lib/python3.13/python3.13/ (nested). Try nested first.
+          if [ -d "$SRC/python/lib/python3.13/python3.13" ]; then
+            cp -a "$SRC/python/lib/python3.13/python3.13" "$DST/python/lib/python3.13"
+          elif [ -d "$SRC/python/lib/python3.13" ]; then
+            cp -a "$SRC/python/lib/python3.13" "$DST/python/lib/python3.13"
+          else
+            echo "ERROR: python3.13 stdlib not found in prebuilt libs"
+            exit 1
+          fi
           # package.sh copies this as libpython3_13_bin.so (sys.executable)
           if [ -f "$SRC/python/bin/python3.13" ]; then
             mkdir -p "$DST/python/bin"
